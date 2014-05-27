@@ -83,8 +83,8 @@ if has("persistent_undo")
 	set undoreload=10000 " maximum number lines to save for undo on a buffer reload
 endif
 
-let html_use_css=1			"generate valid HTML 4.01 markup with CSS1 styling
-let use_xhtml=1				"generate XHTML 1.0 instead (XML compliant HTML)
+let html_use_css=1			" generate valid HTML 4.01 markup with CSS1 styling
+let use_xhtml=1				" generate XHTML 1.0 instead (XML compliant HTML)
 syntax on					" Enable syntax highlighting
 set ai						" when in doubt return, in edit mode, indents to the current indentation level
 set smartindent				" lines ending in a { indent. lines ending in a } outdent
