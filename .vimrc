@@ -1,11 +1,6 @@
 set nocompatible              " be iMproved, required
 filetype off                  " Turn off temporarily for Vundle
 
-" to use vundle:
-"	#1 (cli) git clone https://github.com/gmarik/Vundle.vim.git ~/.vim/bundle/Vundle.vim
-"	#2 (vim) :PluginInstall
-"	#3 (vim) ZZZZ
-
 " set the runtime path to include Vundle and initialize
 set rtp+=~/.vim/bundle/Vundle.vim
 call vundle#begin()
@@ -88,9 +83,8 @@ if has("persistent_undo")
 	set undoreload=10000 " maximum number lines to save for undo on a buffer reload
 endif
 
-" spell spelllang=en_us
-let html_use_css=1 "generate valid HTML 4.01 markup with CSS1 styling
-let use_xhtml=1 "generate XHTML 1.0 instead (XML compliant HTML)
+let html_use_css=1			"generate valid HTML 4.01 markup with CSS1 styling
+let use_xhtml=1				"generate XHTML 1.0 instead (XML compliant HTML)
 syntax on					" Enable syntax highlighting
 set ai						" when in doubt return, in edit mode, indents to the current indentation level
 set smartindent				" lines ending in a { indent. lines ending in a } outdent
@@ -124,14 +118,8 @@ set ttimeoutlen=100 timeoutlen=5000
 set statusline=%<[%n]\ %F\ %m%r%y%=%-14.(%l,%c%V%)\ %P
 
 """ Color Scheme
-let MOLOKAI=expand("~/.vim/colors/molokai.vim")
-if filereadable(MOLOKAI)
-	" https://raw.githubusercontent.com/fatih/molokai/master/colors/molokai.vim
-    let g:molokai_original = 1
-    let g:rehash256 = 1
-else
-    colorscheme desert
-endif
+let g:molokai_original = 1
+let g:rehash256 = 1
 
 " change the directory only for the current window to the directory of the opened file
 autocmd BufEnter * lcd %:p:h
