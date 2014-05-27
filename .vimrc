@@ -6,7 +6,9 @@ set rtp+=~/.vim/bundle/Vundle.vim
 call vundle#begin()
 Plugin 'gmarik/Vundle.vim'				" Vundle, this one should never be removed					github.com/gmarik/Vundle.vim
 Plugin 'majutsushi/tagbar'				" Tag bar													github.com/majutsushi/tagbar
+if has("lua")
 Plugin 'Shougo/neocomplete.vim'			" keyword completion										github.com/Shougo/neocomplete.vim
+endif
 Plugin 'Shougo/neosnippet.vim'			" Snippets support (make things you do a low... faster)		github.com/Shougo/neosnippet.vim
 Plugin 'Shougo/neosnippet-snippets'		" Snippets													github.com/Shougo/neosnippet-snippets
 Plugin 'scrooloose/nerdtree'			" Directory listing/browsing inside vim						github.com/scrooloose/nerdtree
@@ -15,7 +17,9 @@ Plugin 'tpope/vim-git'					" git syntax highlighting, etc								github.com/tpop
 Plugin 'bling/vim-airline'				" nicer, more informative status lines						github.com/bling/vim-airline
 Plugin 'vim-scripts/SQLUtilities'		" SQL tilities												github.com/vim-scripts/SQLUtilities
 Plugin 'nvie/vim-togglemouse'			" f12 (fn+ctrl+f12 on osx) to toggle mouse on and off		github.com/nvie/vim-togglemouse
+if $GOPATH
 Plugin 'fatih/vim-go'					" Go language features										github.com/fatih/vim-go
+endif
 call vundle#end()
 filetype plugin indent on " turn back on file type plugins, allow indent config per file type
 
