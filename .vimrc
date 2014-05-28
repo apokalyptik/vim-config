@@ -6,9 +6,7 @@ set rtp+=~/.vim/bundle/Vundle.vim
 call vundle#begin()
 Plugin 'gmarik/Vundle.vim'				" Vundle, this one should never be removed					github.com/gmarik/Vundle.vim
 Plugin 'majutsushi/tagbar'				" Tag bar													github.com/majutsushi/tagbar
-if has("lua")
 Plugin 'Shougo/neocomplete.vim'			" keyword completion										github.com/Shougo/neocomplete.vim
-endif
 Plugin 'Shougo/neosnippet.vim'			" Snippets support (make things you do a low... faster)		github.com/Shougo/neosnippet.vim
 Plugin 'Shougo/neosnippet-snippets'		" Snippets													github.com/Shougo/neosnippet-snippets
 Plugin 'scrooloose/nerdtree'			" Directory listing/browsing inside vim						github.com/scrooloose/nerdtree
