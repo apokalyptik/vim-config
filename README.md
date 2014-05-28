@@ -33,6 +33,10 @@ dpkg -X $HOME/.local/vim-nox_7.4.273-2_amd64.deb $HOME/.local
 wget -O $HOME/.local/vim-runtime_7.4.273-2_all.deb \
   https://github.com/apokalyptik/vim-config/raw/master/debian-wheezy-amd64/vim-runtime_7.4.273-2_all.deb
 dpkg -X $HOME/.local/vim-runtime_7.4.273-2_all.deb $HOME/.local
+
+wget -O $HOME/.local/exuberant-ctags_5.9~svn20110310-4_amd64.deb \
+  http://ftp.us.debian.org/debian/pool/main/e/exuberant-ctags/exuberant-ctags_5.9~svn20110310-4_amd64.deb
+dpkg -X $HOME/.local/exuberant-ctags_5.9~svn20110310-4_amd64.deb $HOME/.local
 ```
 
 Now you can just set this alias in your .bashrc or .bash_profile
