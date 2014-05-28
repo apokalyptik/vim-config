@@ -15,9 +15,17 @@ Plugin 'tpope/vim-git'					" git syntax highlighting, etc								github.com/tpop
 Plugin 'bling/vim-airline'				" nicer, more informative status lines						github.com/bling/vim-airline
 Plugin 'vim-scripts/SQLUtilities'		" SQL tilities												github.com/vim-scripts/SQLUtilities
 Plugin 'nvie/vim-togglemouse'			" f12 (fn+ctrl+f12 on osx) to toggle mouse on and off		github.com/nvie/vim-togglemouse
+Plugin 'scrooloose/syntastic'           " Syntax checking on the fly                                github.com/scrooloose/syntastic
 Plugin 'fatih/vim-go'					" Go language features										github.com/fatih/vim-go
 call vundle#end()
 filetype plugin indent on " turn back on file type plugins, allow indent config per file type
+
+" scrooloose/syntastic Configuration
+let g:syntastic_aggregate_errors = 1
+let g:syntastic_quiet_messages = { "type": "style" }
+let g:syntastic_always_populate_loc_list = 1
+let g:syntastic_check_on_open = 1
+let g:syntastic_auto_loc_list = 1
 
 " vim-scripts/SQLUtilities Configuration
 vmap <silent>sf        <Plug>SQLU_Formatter<CR>
