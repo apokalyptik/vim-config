@@ -16,7 +16,8 @@ Plugin 'bling/vim-airline'				" nicer, more informative status lines						github
 Plugin 'vim-scripts/SQLUtilities'		" SQL tilities												github.com/vim-scripts/SQLUtilities
 Plugin 'nvie/vim-togglemouse'			" f12 (fn+ctrl+f12 on osx) to toggle mouse on and off		github.com/nvie/vim-togglemouse
 Plugin 'scrooloose/syntastic'           " Syntax checking on the fly                                github.com/scrooloose/syntastic
-Plugin 'fatih/vim-go'					" Go language features										github.com/fatih/vim-go
+" Uncomment the following for Google Go language support
+" Plugin 'fatih/vim-go'					" Go language features										github.com/fatih/vim-go
 call vundle#end()
 filetype plugin indent on " turn back on file type plugins, allow indent config per file type
 
