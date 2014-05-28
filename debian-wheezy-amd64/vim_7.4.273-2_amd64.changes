@@ -1,0 +1,73 @@
+Format: 1.8
+Date: Fri, 02 May 2014 00:17:48 -0400
+Source: vim
+Binary: vim-common vim-gui-common vim-runtime vim-doc vim-tiny vim vim-dbg vim-gtk vim-nox vim-athena vim-lesstif vim-gnome
+Architecture: source amd64 all
+Version: 2:7.4.273-2
+Distribution: unstable
+Urgency: medium
+Maintainer: Debian Vim Maintainers <pkg-vim-maintainers@lists.alioth.debian.org>
+Changed-By: James McCoy <jamessan@debian.org>
+Description: 
+ vim        - Vi IMproved - enhanced vi editor
+ vim-athena - Vi IMproved - enhanced vi editor - with Athena GUI
+ vim-common - Vi IMproved - Common files
+ vim-dbg    - Vi IMproved - enhanced vi editor (debugging symbols)
+ vim-doc    - Vi IMproved - HTML documentation
+ vim-gnome  - Vi IMproved - enhanced vi editor - with GNOME2 GUI
+ vim-gtk    - Vi IMproved - enhanced vi editor - with GTK2 GUI
+ vim-gui-common - Vi IMproved - Common GUI files
+ vim-lesstif - Vi IMproved - enhanced vi editor (transitional package)
+ vim-nox    - Vi IMproved - enhanced vi editor - with scripting languages suppo
+ vim-runtime - Vi IMproved - Runtime files
+ vim-tiny   - Vi IMproved - enhanced vi editor - compact version
+Changes: 
+ vim (2:7.4.273-2) unstable; urgency=medium
+ .
+   * syntax/debcontrol.vim:
+     + Fix architecture orders to work with left-most regex matching.
+Checksums-Sha1: 
+ 3fe2d419411a47e195fad74f1078721ea5d3c445 1828 vim_7.4.273-2.dsc
+ 560ae04641d74ecb1f8f922e03e8cef597e5f869 191234 vim_7.4.273-2.debian.tar.gz
+ 202ac48c4f3acf4178b3a330d729780310c3d207 988420 vim-nox_7.4.273-2_amd64.deb
+ 7c24823305a26b18b494ffbf165b7b37e6bf8c99 1090122 vim-athena_7.4.273-2_amd64.deb
+ b57e3e02cdcd7f1aadca32c122af0fe28a1a56d7 1100890 vim-gtk_7.4.273-2_amd64.deb
+ 892810ce7950545cbf618b988f4f3748673a3b9f 1102518 vim-gnome_7.4.273-2_amd64.deb
+ d25f04c2464b3a6ee50bff17407f8123573b913e 390104 vim-tiny_7.4.273-2_amd64.deb
+ b2d645d3561370bb79778f38d474d417963f1680 153194 vim-gui-common_7.4.273-2_all.deb
+ 0bad9d3a5754c92fc5db0873971b7f894d2e9945 5004672 vim-runtime_7.4.273-2_all.deb
+ 5c767847d83099ee8775fb915e18d78bcc3aac62 1750716 vim-doc_7.4.273-2_all.deb
+ b34304e65d9bbe3b9e5de4f07940fe6a203089b3 89316 vim-lesstif_7.4.273-2_all.deb
+ 8dee6eb3fd11380dc7492b28eca5f7c2c85300af 176610 vim-common_7.4.273-2_amd64.deb
+ 73db8533d81f04b85427dd595c1ba1fbe54abc60 887418 vim_7.4.273-2_amd64.deb
+ b5ffaf0dfdfcd91812d7fc6e920ce25a256e9478 8325810 vim-dbg_7.4.273-2_amd64.deb
+Checksums-Sha256: 
+ fbd6ef31472b8abd61d9281a8ea36483a26ebf6d88fd239d85beeef779c2ba71 1828 vim_7.4.273-2.dsc
+ 04e243497dafd0e5d68f87fb2206c73aa946f00a328e42a4ebdcdb58e2c09470 191234 vim_7.4.273-2.debian.tar.gz
+ 3e41e2bb549c7ebf676ef04f059e4e629345ec3b519cac7656422c7e2014db47 988420 vim-nox_7.4.273-2_amd64.deb
+ 8d2fc81f82947dbe9f9bd913951f64c75c5bc5fed258adad21c8075480a88276 1090122 vim-athena_7.4.273-2_amd64.deb
+ 61c58213e3c7e7e3969e3068a292c991829b5782b391f0cca4f3bdcf2c30289d 1100890 vim-gtk_7.4.273-2_amd64.deb
+ 92f77446a2d15a9ad70832dedca22120ceb126bd66fa723b1b166b52a1ac07e4 1102518 vim-gnome_7.4.273-2_amd64.deb
+ 80b68d82a3789e8804c89ea4c31ff9d72dd74b908a15c989f3c1a2329e0334aa 390104 vim-tiny_7.4.273-2_amd64.deb
+ 17156b204770deed9849bc454b62a2d9429928eb564f4cabd4e461c6e0170ee4 153194 vim-gui-common_7.4.273-2_all.deb
+ f54ab7dd3f76d820cdc4590c7896041b27c08610970b3316a87b2258d600971c 5004672 vim-runtime_7.4.273-2_all.deb
+ 18bd537c6361fc7a9c3e46511223ae9c6f75a4ae692e54a072cb19d7004f44f3 1750716 vim-doc_7.4.273-2_all.deb
+ 3765091f01ac76b1f3f600ce25a2588ec51a3ab8b2ea646dcaef57b399ac57c7 89316 vim-lesstif_7.4.273-2_all.deb
+ 8aba6b374078426a1225f28c9249c8a0a7e4611f66caa480dae1d094c7537d0c 176610 vim-common_7.4.273-2_amd64.deb
+ d53d5d58b8d9a0e5c62358a64146feeb05a2201808cfaabc395a029c13383260 887418 vim_7.4.273-2_amd64.deb
+ f14e324a83e4ceea179ffc61fe051a6704b6ff28ab6c61023b42404d1a690098 8325810 vim-dbg_7.4.273-2_amd64.deb
+Files: 
+ c41bff9a99e42543ff8db59b90b0b01a 1828 editors optional vim_7.4.273-2.dsc
+ 63e616ae01c0aae765e646c963634ae4 191234 editors optional vim_7.4.273-2.debian.tar.gz
+ a6b6cbd87a0213b3980cb3fcc7bb2b0c 988420 editors extra vim-nox_7.4.273-2_amd64.deb
+ 8258dd1350242d3c328033080a98f481 1090122 editors extra vim-athena_7.4.273-2_amd64.deb
+ c896539780c0369cbe82db3eb0a07e6f 1100890 editors extra vim-gtk_7.4.273-2_amd64.deb
+ 9d26df76f0d1ed00172a81e5b55f0d49 1102518 editors extra vim-gnome_7.4.273-2_amd64.deb
+ 249c0b6ae9d5d45cd10f825c7dc0c134 390104 editors important vim-tiny_7.4.273-2_amd64.deb
+ 80412416d1f8b8681e1918675f0d3805 153194 editors optional vim-gui-common_7.4.273-2_all.deb
+ 6ab52cbbb977dc5430914b0a84cfeb48 5004672 editors optional vim-runtime_7.4.273-2_all.deb
+ 51c503009d233ede5eee48bc62847f51 1750716 doc optional vim-doc_7.4.273-2_all.deb
+ 618b69dfb64f540f07954f108104f3d2 89316 oldlibs extra vim-lesstif_7.4.273-2_all.deb
+ aa3bcec35ed4e2e4de900fa2d80ac765 176610 editors important vim-common_7.4.273-2_amd64.deb
+ 80f198c498be8b95bac5dc63b015e97e 887418 editors optional vim_7.4.273-2_amd64.deb
+ c25bca9fc7278646c7facb9ca0074c11 8325810 debug extra vim-dbg_7.4.273-2_amd64.deb
