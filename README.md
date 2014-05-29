@@ -30,8 +30,8 @@ export PATH=$PATH:$GOROOT/bin
   mkdir -p $HOME/.vim/colors
   wget --quiet -O $HOME/.vimrc \
     https://raw.githubusercontent.com/apokalyptik/vim-config/master/.vimrc > $HOME/.vimrc
-  wget --quiet -O $HOME/.vim/colors/molokai.vim \
-    https://raw.githubusercontent.com/fatih/molokai/master/colors/molokai.vim
+  wget --quiet -O $HOME/.vim/colors/vividchalk.vim \
+    https://raw.githubusercontent.com/tpope/vim-vividchalk/master/colors/vividchalk.vim
   git clone https://github.com/gmarik/Vundle.vim.git ~/.vim/bundle/Vundle.vim
   vim +PluginClean +PluginInstall +qall
   $HOME/.vim/bundles/
