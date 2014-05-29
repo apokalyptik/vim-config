@@ -17,8 +17,10 @@ Installing My personal vim configuration
 )
 ```
 
-Installing Go (so vim-go doesn't complain) if you don't have it already
-=======================================================================
+Installing Go 
+=============
+(so vim-go doesn't complain) if you don't have it already
+
 ```bash
 mkdir $HOME/go
 wget -O - https://storage.googleapis.com/golang/go1.2.2.linux-amd64.tar.gz | tar -C $HOME/go -xzvf -
