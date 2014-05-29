@@ -9,7 +9,7 @@ This is my own personal vim configuration, and how to get/use/install it. It is 
 
 ```bash
 mkdir $HOME/go
-wget -O - https://storage.googleapis.com/golang/go1.2.2.linux-amd64.tar.gz | tar -C $HOME/go -xzvf -
+wget --quiet -O - https://storage.googleapis.com/golang/go1.2.2.linux-amd64.tar.gz | tar -C $HOME/go -xzvf -
 export GOROOT=$HOME/go/go
 export GOPATH=$HOME/go
 export PATH=$PATH:$GOROOT/bin
