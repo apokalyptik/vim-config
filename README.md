@@ -1,24 +1,8 @@
 vim-config
 ==========
 
-Installing My personal vim configuration
-========================================
+## Installing Go 
 
-```bash
-(
-  mkdir -p $HOME/.vim/colors
-  wget --quiet -O $HOME/.vimrc \
-    https://raw.githubusercontent.com/apokalyptik/vim-config/master/.vimrc > $HOME/.vimrc
-  wget --quiet -O $HOME/.vim/colors/molokai.vim \
-    https://raw.githubusercontent.com/fatih/molokai/master/colors/molokai.vim
-  git clone https://github.com/gmarik/Vundle.vim.git ~/.vim/bundle/Vundle.vim
-  vim +PluginClean +PluginInstall +qall
-  $HOME/.vim/bundles/
-)
-```
-
-Installing Go 
-=============
 (so vim-go doesn't complain) if you don't have it already
 
 ```bash
@@ -37,8 +21,23 @@ export GOPATH=$HOME/go
 export PATH=$PATH:$GOROOT/bin
 ```
 
-Setting up VIM on Debian Wheezy
-===============================
+## Installing this VIM configuration
+
+```bash
+(
+  mkdir -p $HOME/.vim/colors
+  wget --quiet -O $HOME/.vimrc \
+    https://raw.githubusercontent.com/apokalyptik/vim-config/master/.vimrc > $HOME/.vimrc
+  wget --quiet -O $HOME/.vim/colors/molokai.vim \
+    https://raw.githubusercontent.com/fatih/molokai/master/colors/molokai.vim
+  git clone https://github.com/gmarik/Vundle.vim.git ~/.vim/bundle/Vundle.vim
+  vim +PluginClean +PluginInstall +qall
+  $HOME/.vim/bundles/
+)
+```
+
+## Setting up VIM on Debian Wheezy
+
 Wheezy has an old version of vim that supports niether neocomplete nor youcompleteme. I built vim 7.4 .deb files for the purpose of working around this limitation. To use these replacement vim versions we need to do the following (as root):
 
 ```bash
