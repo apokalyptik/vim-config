@@ -1,6 +1,8 @@
 vim-config
 ==========
 
+This is my own personal vim configuration, and how to get/use/install it. It is a work in progress.
+
 ## Installing Go 
 
 (so vim-go doesn't complain) if you don't have it already
