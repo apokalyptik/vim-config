@@ -133,8 +133,7 @@ set ttimeoutlen=100 timeoutlen=5000
 set statusline=%<[%n]\ %F\ %m%r%y%=%-14.(%l,%c%V%)\ %P
 
 """ Color Scheme
-let g:molokai_original = 1
-let g:rehash256 = 1
+colorscheme vividchalk
 
 " change the directory only for the current window to the directory of the opened file
 autocmd BufEnter * lcd %:p:h
