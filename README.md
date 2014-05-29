@@ -17,6 +17,24 @@ Installing My personal vim configuration
 )
 ```
 
+Installing Go (so vim-go doesn't complain) if you don't have it already
+=======================================================================
+```bash
+mkdir $HOME/go
+wget -O - https://storage.googleapis.com/golang/go1.2.2.linux-amd64.tar.gz | tar -C $HOME/go -xzvf -
+export GOROOT=$HOME/go/go
+export GOPATH=$HOME/go
+export PATH=$PATH:$GOROOT/bin
+```
+
+Now add the following to your .bashrc or .bash_profile
+
+```bash
+export GOROOT=$HOME/go/go
+export GOPATH=$HOME/go
+export PATH=$PATH:$GOROOT/bin
+```
+
 Setting up VIM on Debian Wheezy
 ===============================
 Wheezy has an old version of vim that supports niether neocomplete nor youcompleteme. I built vim 7.4 .deb files for the purpose of working around this limitation. To use these replacement vim versions we need to do the following (as root):
