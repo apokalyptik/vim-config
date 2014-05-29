@@ -9,13 +9,14 @@ Plugin 'majutsushi/tagbar'				" Tag bar													github.com/majutsushi/tagbar
 Plugin 'Shougo/neocomplete.vim'			" keyword completion										github.com/Shougo/neocomplete.vim
 Plugin 'Shougo/neosnippet.vim'			" Snippets support (make things you do a low... faster)		github.com/Shougo/neosnippet.vim
 Plugin 'Shougo/neosnippet-snippets'		" Snippets													github.com/Shougo/neosnippet-snippets
+Plugin 'Shougo/vimproc.vim'				" Asynchronous execution plugin for Vim						github.com/Shougo/vimproc.vim
 Plugin 'scrooloose/nerdtree'			" Directory listing/browsing inside vim						github.com/scrooloose/nerdtree
 Plugin 'tpope/vim-fugitive'				" Add some git support										github.com/tpope/vim-fugitive
 Plugin 'tpope/vim-git'					" git syntax highlighting, etc								github.com/tpope/vim-git
 Plugin 'bling/vim-airline'				" nicer, more informative status lines						github.com/bling/vim-airline
 Plugin 'vim-scripts/SQLUtilities'		" SQL tilities												github.com/vim-scripts/SQLUtilities
 Plugin 'nvie/vim-togglemouse'			" f12 (fn+ctrl+f12 on osx) to toggle mouse on and off		github.com/nvie/vim-togglemouse
-Plugin 'scrooloose/syntastic'           " Syntax checking on the fly                                github.com/scrooloose/syntastic
+Plugin 'scrooloose/syntastic'			" Syntax checking on the fly                                github.com/scrooloose/syntastic
 " Uncomment the following for Google Go language support
 " Plugin 'fatih/vim-go'					" Go language features										github.com/fatih/vim-go
 call vundle#end()
@@ -65,7 +66,12 @@ nmap <silent>scp       <Plug>SQLU_CreateProcedure<CR>
 
 
 " Shougo/neocomplete.vim Configuration
+	call system('mkdir -p ~/.vim/.cache/neocomplete')
+	let g:neocomplete#data_directory='~/.vim/.cache/neocomplete'
 	let g:acp_enableAtStartup = 0
+	let g:neocomplete#enable_ignore_case = 1
+	let g:neocomplete#enable_smart_case = 1
+	let g:neocomplete#enable_auto_select = 1
 	let g:neocomplete#enable_at_startup = 1
 	let g:neocomplete#enable_smart_case = 1
 	let g:neocomplete#sources#syntax#min_keyword_length = 3
@@ -120,6 +126,7 @@ set softtabstop=4			" Number of spaces that a <Tab> counts for while performing 
 set smartcase				" Override the 'ignorecase' option if the search pattern contains upper case characters.
 set tabstop=4				" Number of spaces that a <Tab> in the file counts for.
 set wildmenu				" Make use of the "status line" to show possible completions of command line commands, file names, and more.
+set wrap linebreak nolist   " soft line wrap
 set wildmode=list:longest,full
 							" When more than one match, list all matches and complete till longest common string. Complete the next full match
 set ttimeoutlen=100 timeoutlen=5000
