@@ -22,10 +22,9 @@ call vundle#end()
 filetype plugin indent on " turn back on file type plugins, allow indent config per file type
 
 " Shougo/vimproc.vim
-if 0 == glob("~/.vim/bundle/vimproc.vim/autoload/vimproc_*.so")
-	call system("cd ~/.vim/bundle/vimproc.vim/ && make")
+if 0 == filereadable(expand("~/.vim/bundle/vimproc.vim/autoload/vimproc_*.so"))
+    call system("cd ~/.vim/bundle/vimproc.vim/ && make")
 endif
-
 
 " nvie/vim-togglemouse notes
 	" I have (in iTerm2) alt+middle-mouse mapped to type 'Send Escape Sequence...': ESC+ '[24~'
