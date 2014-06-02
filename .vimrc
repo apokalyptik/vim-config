@@ -11,21 +11,25 @@ Plugin 'Shougo/neosnippet.vim'			" Snippets support (make things you do a low...
 Plugin 'Shougo/neosnippet-snippets'		" Snippets													github.com/Shougo/neosnippet-snippets
 Plugin 'Shougo/vimproc.vim'				" Asynchronous execution plugin for Vim						github.com/Shougo/vimproc.vim
 Plugin 'scrooloose/nerdtree'			" Directory listing/browsing inside vim						github.com/scrooloose/nerdtree
+Plugin 'jistr/vim-nerdtree-tabs'		" Make NERDTree feel like a true panel, independent of tabs	github.com/jistr/vim-nerdtree-tabs
 Plugin 'tpope/vim-fugitive'				" Add some git support										github.com/tpope/vim-fugitive
 Plugin 'tpope/vim-git'					" git syntax highlighting, etc								github.com/tpope/vim-git
 Plugin 'bling/vim-airline'				" nicer, more informative status lines						github.com/bling/vim-airline
 Plugin 'vim-scripts/SQLUtilities'		" SQL tilities												github.com/vim-scripts/SQLUtilities
 Plugin 'nvie/vim-togglemouse'			" f12 (fn+ctrl+f12 on osx) to toggle mouse on and off		github.com/nvie/vim-togglemouse
 Plugin 'scrooloose/syntastic'			" Syntax checking on the fly                                github.com/scrooloose/syntastic
-Plugin 'fatih/vim-go'					" Go language features										github.com/fatih/vim-go
 Plugin 'mileszs/ack.vim'				" use ack to search files									github.com/mileszs/ack.vim
+Plugin 'fatih/vim-go'					" Go language features										github.com/fatih/vim-go
 call vundle#end()
 filetype plugin indent on " turn back on file type plugins, allow indent config per file type
 
 " Shougo/vimproc.vim
 if 0 == filereadable(expand("~/.vim/bundle/vimproc.vim/autoload/vimproc_*.so"))
-    call system("cd ~/.vim/bundle/vimproc.vim/ && make")
+	call system("cd ~/.vim/bundle/vimproc.vim/ && make")
 endif
+
+" jistr/vim-nerdtree-tabs
+	map <Leader>n <plug>NERDTreeTabsToggle<CR>
 
 " nvie/vim-togglemouse notes
 	" I have (in iTerm2) alt+middle-mouse mapped to type 'Send Escape Sequence...': ESC+ '[24~'
@@ -152,6 +156,9 @@ colorscheme vividchalk
 
 " change the directory only for the current window to the directory of the opened file
 autocmd BufEnter * lcd %:p:h
+
+" Make mouse for vim by default
+set mouse=a
 
 " Provide easy updating of vim via :call UpdateVimrc()
 function! UpdateVimrc()
