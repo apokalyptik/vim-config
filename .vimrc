@@ -163,10 +163,8 @@ set mouse=a
 " Provide easy updating of vim via :call UpdateVimrc()
 function! UpdateVimrc()
     call system("wget -O ~/.vimrc 'https://github.com/apokalyptik/vim-config/raw/master/.vimrc'")
-    source ~/.vimrc
+    silent source ~/.vimrc
     silent PluginClean!
     silent PluginInstall!
-    q!
-    source ~/.vimrc
-    silent edit!
+    silent qall!
 endfunction
