@@ -160,11 +160,17 @@ autocmd BufEnter * lcd %:p:h
 " Make mouse for vim by default
 set mouse=a
 
-" Provide easy updating of vim via :call UpdateVimrc()
-function! UpdateVimrc()
-    call system("wget -O ~/.vimrc 'https://github.com/apokalyptik/vim-config/raw/master/.vimrc'")
+" Provide easy updating of vim via :call UpdateVimrc(), and then reopening vim
+if filereadable(expand("~/.vim/updated.vimrc"))
+    call system("rm -f ~/.vim/updated.vimrc")
     silent source ~/.vimrc
     silent PluginClean!
     silent PluginInstall!
+    silent source ~/.vimrc
+    silent q!
+endif
+function! UpdateVimrc()
+    call system("wget -O ~/.vimrc 'https://github.com/apokalyptik/vim-config/raw/master/.vimrc'")
+    call system("touch ~/.vim/updated.vimrc")
     silent qall!
 endfunction
