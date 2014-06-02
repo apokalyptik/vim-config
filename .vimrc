@@ -21,19 +21,24 @@ Plugin 'fatih/vim-go'					" Go language features										github.com/fatih/vim-g
 call vundle#end()
 filetype plugin indent on " turn back on file type plugins, allow indent config per file type
 
+" nvie/vim-togglemouse notes
+	" I have (in iTerm2) alt+middle-mouse mapped to type 'Send Escape Sequence...': ESC+ '[24~'
+	" which sends f12 (this doesn't work with shift, option, or plain middle mouse well (we get
+	" into mouse mode, but not out of it), alt-middlebutton seems to work fine for both
+
 " scrooloose/syntastic Configuration
-let g:syntastic_aggregate_errors = 1
-let g:syntastic_quiet_messages = { "type": "style" }
-let g:syntastic_always_populate_loc_list = 1
-let g:syntastic_check_on_open = 1
-let g:syntastic_auto_loc_list = 1
+	let g:syntastic_aggregate_errors = 1
+	let g:syntastic_quiet_messages = { "type": "style" }
+	let g:syntastic_always_populate_loc_list = 1
+	let g:syntastic_check_on_open = 1
+	let g:syntastic_auto_loc_list = 1
 
 " vim-scripts/SQLUtilities Configuration
-vmap <silent>sf        <Plug>SQLU_Formatter<CR>
-nmap <silent>scl       <Plug>SQLU_CreateColumnList<CR>
-nmap <silent>scd       <Plug>SQLU_GetColumnDef<CR>
-nmap <silent>scdt      <Plug>SQLU_GetColumnDataType<CR>
-nmap <silent>scp       <Plug>SQLU_CreateProcedure<CR>
+	vmap <silent>sf        <Plug>SQLU_Formatter<CR>
+	nmap <silent>scl       <Plug>SQLU_CreateColumnList<CR>
+	nmap <silent>scd       <Plug>SQLU_GetColumnDef<CR>
+	nmap <silent>scdt      <Plug>SQLU_GetColumnDataType<CR>
+	nmap <silent>scp       <Plug>SQLU_CreateProcedure<CR>
 
 " scrooloose/nerdtree Configuration
 	" Ctrl+N to toggle NerdTree
