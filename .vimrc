@@ -146,3 +146,14 @@ colorscheme vividchalk
 
 " change the directory only for the current window to the directory of the opened file
 autocmd BufEnter * lcd %:p:h
+
+" Provide easy updating of vim via :call UpdateVimrc()
+function! UpdateVimrc()
+    call system("wget -O ~/.vimrc 'https://github.com/apokalyptik/vim-config/raw/master/.vimrc'")
+    source ~/.vimrc
+    silent PluginClean!
+    silent PluginInstall!
+    q!
+    source ~/.vimrc
+    silent edit!
+endfunction
