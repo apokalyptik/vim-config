@@ -67,6 +67,10 @@ filetype plugin indent on " turn back on file type plugins, allow indent config 
 	if has('conceal')
 	  set conceallevel=2 concealcursor=i
 	endif
+	
+	" Load local snippets
+	call system('mkdir -p ~/.vim/snips')
+	let g:neosnippet#snippets_directory = "~/.vim/snips"
 
 
 " Shougo/neocomplete.vim Configuration
