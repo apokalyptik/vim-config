@@ -157,8 +157,8 @@ colorscheme vividchalk
 " change the directory only for the current window to the directory of the opened file
 autocmd BufEnter * lcd %:p:h
 
-" Make mouse for vim by default
-set mouse=a
+" Make mouse for vim by default, clicks don't go into visual mode...
+set mouse=nichr
 
 " Provide easy updating of vim via :call UpdateVimrc(), and then reopening vim
 if filereadable(expand("~/.vim/updated.vimrc"))
