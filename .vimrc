@@ -24,9 +24,10 @@ call vundle#end()
 filetype plugin indent on " turn back on file type plugins, allow indent config per file type
 
 " Shougo/vimproc.vim
-if 0 == filereadable(expand("~/.vim/bundle/vimproc.vim/autoload/vimproc_*.so"))
-	call system("cd ~/.vim/bundle/vimproc.vim/ && make")
-endif
+    silent let vimprocpath = g:vimproc#dll_path
+    if 0 == filereadable(vimprocpath)
+        call system("cd ~/.vim/bundle/vimproc.vim/ && make")
+    endif
 
 " jistr/vim-nerdtree-tabs
 	map <Leader>n <plug>NERDTreeTabsToggle<CR>
