@@ -116,6 +116,9 @@ if has("persistent_undo")
 	set undoreload=10000 " maximum number lines to save for undo on a buffer reload
 endif
 
+vnoremap < <gv " In visual mode, < keeps selection after outdenting
+vnoremap > >gv " In visual mode, > keeps the selection after indenting
+
 let html_use_css=1			" generate valid HTML 4.01 markup with CSS1 styling
 let use_xhtml=1				" generate XHTML 1.0 instead (XML compliant HTML)
 syntax on					" Enable syntax highlighting
