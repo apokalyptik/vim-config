@@ -20,6 +20,7 @@ Plugin 'nvie/vim-togglemouse'			" f12 (fn+ctrl+f12 on osx) to toggle mouse on an
 Plugin 'scrooloose/syntastic'			" Syntax checking on the fly                                github.com/scrooloose/syntastic
 Plugin 'mileszs/ack.vim'				" use ack to search files									github.com/mileszs/ack.vim
 Plugin 'fatih/vim-go'					" Go language features										github.com/fatih/vim-go
+Plugin 'vim-scripts/minibufexpl.vim'    " Clickable Buffer Explorer                                 github.com/vim-scripts/minibufexpl.vim
 call vundle#end()
 filetype plugin indent on " turn back on file type plugins, allow indent config per file type
 
