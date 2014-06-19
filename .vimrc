@@ -43,6 +43,7 @@ filetype plugin indent on " turn back on file type plugins, allow indent config 
 	let g:syntastic_always_populate_loc_list = 1
 	let g:syntastic_check_on_open = 1
 	let g:syntastic_auto_loc_list = 1
+	let g:syntastic_python_pylint_args='--disable=E1101'
 
 " vim-scripts/SQLUtilities Configuration
 	vmap <silent>sf        <Plug>SQLU_Formatter<CR>
