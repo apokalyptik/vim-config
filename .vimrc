@@ -14,6 +14,8 @@ Plugin 'scrooloose/nerdtree'			" Directory listing/browsing inside vim						gith
 Plugin 'jistr/vim-nerdtree-tabs'		" Make NERDTree feel like a true panel, independent of tabs	github.com/jistr/vim-nerdtree-tabs
 Plugin 'tpope/vim-fugitive'				" Add some git support										github.com/tpope/vim-fugitive
 Plugin 'tpope/vim-git'					" git syntax highlighting, etc								github.com/tpope/vim-git
+Plugin 'godlygeek/tabular'              " Text alignment                                            github.com/godlygeek/tabular
+Plugin 'plasticboy/vim-markdown'        " Markdown support                                          github.com/plasticboy/vim-markdown/
 Plugin 'bling/vim-airline'				" nicer, more informative status lines						github.com/bling/vim-airline
 Plugin 'vim-scripts/SQLUtilities'		" SQL tilities												github.com/vim-scripts/SQLUtilities
 Plugin 'nvie/vim-togglemouse'			" f12 (fn+ctrl+f12 on osx) to toggle mouse on and off		github.com/nvie/vim-togglemouse
@@ -22,6 +24,9 @@ Plugin 'mileszs/ack.vim'				" use ack to search files									github.com/mileszs
 Plugin 'fatih/vim-go'					" Go language features										github.com/fatih/vim-go
 call vundle#end()
 filetype plugin indent on " turn back on file type plugins, allow indent config per file type
+
+" plasticboy/vim-markdown
+	let g:vim_markdown_folding_disabled=1
 
 " Shougo/vimproc.vim
     silent let vimprocpath = g:vimproc#dll_path
