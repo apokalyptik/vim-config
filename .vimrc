@@ -25,6 +25,11 @@ Plugin 'fatih/vim-go'					" Go language features										github.com/fatih/vim-g
 call vundle#end()
 filetype plugin indent on " turn back on file type plugins, allow indent config per file type
 
+" fatih/vim-go
+" we don't need to report errors, syntastic handles that for us...
+    let g:go_fmt_fail_silently = 1
+    let g:go_fmt_command = "goimports"
+
 " plasticboy/vim-markdown
 	let g:vim_markdown_folding_disabled=1
 
