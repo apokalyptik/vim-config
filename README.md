@@ -34,8 +34,12 @@ export PATH=$PATH:$GOROOT/bin
     https://raw.githubusercontent.com/tpope/vim-vividchalk/master/colors/vividchalk.vim
   git clone https://github.com/gmarik/Vundle.vim.git ~/.vim/bundle/Vundle.vim
   vim +PluginClean +PluginInstall +qall
-  $HOME/.vim/bundles/
 )
+```
+
+## If you plan on using this for Go... Do this inside vim (once)
+```vim
+:GoInstallBinaries
 ```
 
 ## Setting up VIM on Debian Wheezy
