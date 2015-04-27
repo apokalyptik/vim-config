@@ -189,3 +189,11 @@ function! UpdateVimrc()
     call system("touch ~/.vim/updated.vimrc")
     silent qall!
 endfunction
+
+function SassToCss()
+    let current_file = shellescape(expand('%:p'))
+    let filename = shellescape(expand('%:r'))
+    let command = "silent !sass " . current_file . " " . filename . ".css"
+    execute command
+endfunction
+autocmd BufWritePost,FileWritePost *.scss call SassToCss()
