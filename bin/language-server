@@ -19,9 +19,14 @@ export GOFLAGS="${GOFLAGS-} -mod=readonly"
 case "$server" in
     php) set -- "$runtime/bin/phpantom_lsp" "$@" ;;
     go)
+        # Relocated SDK discovery also needs an explicit root without procfs.
+        export GOROOT="$runtime/go"
         # gopls can exit asynchronously if its persistent index is unwritable.
         # Use checkout state by default, without changing the user's Go caches.
         export GOPLSCACHE="${GOPLSCACHE:-$config_root/.state/cache/gopls}"
+        # The bundled compatibility patch hashes this file if procfs cannot
+        # report the executable path. Keep this tied to the binary we execute.
+        export VIM_CONFIG_GOPLS_EXECUTABLE="$runtime/bin/gopls"
         set -- "$runtime/bin/gopls" "$@"
         ;;
     typescript) set -- "$runtime/bin/node" "$tools/shared/node_modules/typescript-language-server/lib/cli.mjs" --stdio "$@" ;;

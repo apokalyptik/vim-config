@@ -11,6 +11,7 @@ cp "$test_root/bin/setup" "$fixture/bin/setup"
 printf 'new tool\n' > "$test_tmp/input/bin/tool"
 tar -czf "$fixture/payloads/platform.tar.gz" -C "$test_tmp/input" bin
 tar -czf "$fixture/payloads/shared.tar.gz" -C "$test_tmp/input" bin
+cp "$fixture/payloads/shared.tar.gz" "$test_tmp/good-shared.tar.gz"
 openssl_bin=$(command -v openssl)
 fixture_digest=$("$openssl_bin" dgst -sha256 "$fixture/payloads/platform.tar.gz")
 fixture_digest=${fixture_digest##* }
@@ -41,7 +42,7 @@ printf 'corruption' >> "$fixture/payloads/shared.tar.gz"
 if run_setup --profile misc; then fail 'accepted checksum mismatch'; fi
 [[ $(cat "$fixture/.state/tools/linux-x86_64/bin/tool") == 'old platform' ]] || fail 'checksum failure changed tools'
 [[ $(cat "$fixture/.state/profile") == container ]] || fail 'checksum failure changed profile'
-tar -czf "$fixture/payloads/shared.tar.gz" -C "$test_tmp/input" bin
+cp "$test_tmp/good-shared.tar.gz" "$fixture/payloads/shared.tar.gz"
 # Make the replacement of the second tree fail once, after the first moved.
 mv_bin=$(command -v mv)
 rm "$test_tmp/host-bin/mv"

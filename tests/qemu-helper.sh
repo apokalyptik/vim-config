@@ -6,6 +6,9 @@
 # the checked-in Linux PHPantom/Node/gopls archives and test their startup.
 # VIM_CONFIG_QEMU_NO_SYSTEM_CXX=1 omits system libstdc++/libgcc to test the
 # bundled Node runtime's private C++ libraries.
+# VIM_CONFIG_QEMU_GOPLS_NO_PROC=1 adds an offline Go SDK/LSP regression with
+# /proc absent. Supply VIM_CONFIG_QEMU_GOPLS_BASELINE (upstream executable), and
+# optionally VIM_CONFIG_QEMU_GOPLS_PATCHED to test a build before repackaging.
 # Test inputs are explicitly supplied, not host files.
 set -eu
 [ "$#" -eq 4 ] || { printf '%s\n' 'Usage: tests/qemu-helper.sh KERNEL BUSYBOX DEBIAN-PACKAGES-JSON DOWNLOADS-DIR' >&2; exit 64; }
@@ -50,11 +53,13 @@ if not (rootfs / 'bin/sh').exists():
     (rootfs / 'bin/sh').symlink_to('busybox')
 for relative in ['bin/helper-run', 'libexec/helper-run-inner']:
     shutil.copy2(repo / relative, rootfs / 'opt/vim-config' / relative)
-include_payloads = os.environ.get('VIM_CONFIG_QEMU_PAYLOADS') == '1'
+include_no_proc = os.environ.get('VIM_CONFIG_QEMU_GOPLS_NO_PROC') == '1'
+include_payloads = os.environ.get('VIM_CONFIG_QEMU_PAYLOADS') == '1' or include_no_proc
 if include_payloads:
     manifest = json.loads((repo / 'tools/vendor-manifest.json').read_text())
     for payload in manifest['payloads']:
-        if payload['platform'] != 'linux-x86_64' or not payload['id'].startswith(('phpantom-', 'node-', 'gopls-')):
+        selected = payload['id'].startswith(('phpantom-', 'node-', 'gopls-')) or (include_no_proc and payload['id'].startswith('go1.'))
+        if payload['platform'] != 'linux-x86_64' or not selected:
             continue
         if len(payload['parts']) != 1:
             raise SystemExit('This fixture expects a single-part payload archive')
@@ -66,6 +71,19 @@ if include_payloads:
             destination /= 'bin'
         destination.mkdir(parents=True, exist_ok=True)
         subprocess.run([tar, '-xf', str(archive), '-C', str(destination)], check=True)
+if include_no_proc:
+    baseline = os.environ.get('VIM_CONFIG_QEMU_GOPLS_BASELINE')
+    if not baseline:
+        raise SystemExit('VIM_CONFIG_QEMU_GOPLS_BASELINE must name an upstream Linux gopls executable')
+    shutil.copy2(baseline, rootfs / 'opt/vim-tools/bin/gopls-upstream')
+    candidate = os.environ.get('VIM_CONFIG_QEMU_GOPLS_PATCHED')
+    if candidate:
+        shutil.copy2(candidate, rootfs / 'opt/vim-tools/bin/gopls')
+    shutil.copy2(repo / 'bin/language-server', rootfs / 'opt/vim-config/bin/language-server')
+    shutil.copy2(repo / 'tests/gopls-no-proc.cjs', rootfs / 'usr/bin/gopls-no-proc.cjs')
+    tool_links = rootfs / 'opt/vim-config/.state/tools'
+    tool_links.mkdir(parents=True)
+    (tool_links / 'linux-x86_64').symlink_to('/opt/vim-tools')
 (rootfs / 'etc/passwd').write_text('root:x:0:0:root:/root:/bin/sh\ntester:x:1000:1000:tester:/home/tester:/bin/sh\n')
 (rootfs / 'etc/group').write_text('root:x:0:\ntester:x:1000:\n')
 (rootfs / 'home/tester/project/allowed.txt').write_text('ORIGINAL_TREE\n')
@@ -99,6 +117,10 @@ if test -x /usr/bin/strace; then
     else
         printf 'FAIL_HELPER_NFS_FILE_TRACE\\n'
     fi
+fi
+if test -f /usr/bin/gopls-no-proc.cjs; then
+    /usr/bin/unshare --mount --fork --propagation private -- /bin/sh -c \\
+        'umount /proc && /bin/busybox su -s /bin/sh tester -c /usr/bin/gopls-no-proc-tests'
 fi
 poweroff -f
 ''')
@@ -166,7 +188,13 @@ runner=/opt/vim-config/bin/helper-run
 "$runner" --profile sandbox -- /opt/vim-tools/bin/gopls version
 printf 'VIM_HELPER_LINUX_PAYLOADS_PASS\\n'
 ''')
-for relative in ['init', 'usr/bin/isolation-tests', 'usr/bin/payload-tests']:
+(rootfs / 'usr/bin/gopls-no-proc-tests').write_text('''#!/bin/sh
+set -eu
+export PATH=/usr/bin:/bin
+test ! -e /proc/self/exe
+exec /opt/vim-tools/bin/node /usr/bin/gopls-no-proc.cjs
+''')
+for relative in ['init', 'usr/bin/isolation-tests', 'usr/bin/payload-tests', 'usr/bin/gopls-no-proc-tests']:
     (rootfs / relative).chmod(0o755)
 
 # Write newc without requiring host root or creating host device nodes.
@@ -194,11 +222,12 @@ entry('TRAILER!!!', 0)
 initrd = fixture / 'test-initramfs.cpio.gz'
 initrd.write_bytes(gzip.compress(archive, mtime=0))
 command = [qemu, '-machine', 'q35,accel=tcg', '-cpu', 'qemu64,+rdrand,+rdseed',
-           '-m', '1024M' if include_payloads else '512M', '-smp', '1', '-kernel', str(kernel), '-initrd', str(initrd),
+           '-m', '3072M' if include_no_proc else '1024M' if include_payloads else '512M',
+           '-smp', '2' if include_no_proc else '1', '-kernel', str(kernel), '-initrd', str(initrd),
            '-append', 'console=ttyS0 rdinit=/init loglevel=3 panic=1 random.trust_cpu=on',
            '-display', 'none', '-serial', 'stdio', '-monitor', 'none', '-no-reboot', '-nic', 'none']
 try:
-    result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=90)
+    result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=240 if include_no_proc else 90)
 except subprocess.TimeoutExpired as exc:
     (fixture / 'test-console.log').write_bytes(exc.stdout or b'')
     raise SystemExit('QEMU timeout; inspect .state/qemu-helper/test-console.log')
@@ -210,5 +239,7 @@ if (rootfs / 'usr/bin/strace').exists() and b'VIM_HELPER_ZERO_TOUCH_AUDIT_PASS' 
     raise SystemExit('Original /nfs path syscall audit failed')
 if include_payloads and b'VIM_HELPER_LINUX_PAYLOADS_PASS' not in result.stdout:
     raise SystemExit('Linux payload startup check failed')
+if include_no_proc and b'VIM_GOPLS_NO_PROC_REGRESSION_PASS' not in result.stdout:
+    raise SystemExit('Go no-/proc regression failed')
 print('PASS: real Linux namespace/mask/proc/capability tests; fixture mount is tmpfs, not an NFS server')
 PY

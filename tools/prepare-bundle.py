@@ -288,6 +288,87 @@ def collect_licenses(work):
     print(f'Preserved notices for {len(crates)} locked Rust crates and {len(packages)} JavaScript packages')
 
 
+def supported_host():
+    identity = (os.uname().sysname, os.uname().machine)
+    if identity == ('Darwin', 'arm64'):
+        return 'darwin-arm64'
+    if identity[0] == 'Linux' and identity[1] in ('x86_64', 'amd64'):
+        return 'linux-x86_64'
+    raise RuntimeError('Unsupported preparation host: ' + repr(identity))
+
+
+def record_payloads(manifest, identifiers=None):
+    for payload in manifest['payloads']:
+        if identifiers is not None and payload['id'] not in identifiers:
+            continue
+        payload['sha256'] = sha256(ROOT / payload['parts'][0])
+        payload['size_bytes'] = (ROOT / payload['parts'][0]).stat().st_size
+    MANIFEST.write_text(json.dumps(manifest, indent=2) + '\n')
+    write_payloads_tsv(manifest)
+
+
+def build_gopls(work, manifest, offline=False):
+    """Build only the patched Go server; never mutate the module source cache."""
+    work.mkdir(parents=True, exist_ok=True)
+    host = supported_host()
+    sdk = next(p for p in manifest['payloads'] if p['platform'] == host and p['id'].startswith('go1.'))
+    sdk_archive = ROOT / sdk['parts'][0]
+    if sha256(sdk_archive) != sdk['sha256']:
+        raise RuntimeError('Go SDK archive checksum mismatch')
+    host_go = work / 'go-host'
+    extract(sdk_archive, host_go)
+    go = str(host_go / 'go/bin/go')
+    config = manifest['gopls_build']
+    patcher = ROOT / config['patch_script']
+    if sha256(patcher) != config['patch_script_sha256']:
+        raise RuntimeError('gopls patch helper checksum mismatch')
+    build_config = work / 'config'
+    telemetry_mode = build_config / 'go/telemetry/mode'
+    telemetry_mode.parent.mkdir(parents=True, exist_ok=True)
+    telemetry_mode.write_text('off\n')
+    telemetry_mode.chmod(0o600)
+    env = os.environ.copy()
+    # All required Go paths are explicit. Linux reads the supported off mode
+    # above; Darwin ignores XDG_CONFIG_HOME, so remove inherited HOME to make
+    # os.UserConfigDir fail and telemetry default off without touching the host.
+    env.pop('HOME', None)
+    env.update(GOPATH=str(work / 'gopath'), GOMODCACHE=str(work / 'gomodcache'), GOCACHE=str(work / 'go-cache'), XDG_CONFIG_HOME=str(build_config), GOENV='off', GOTOOLCHAIN='local', CGO_ENABLED='0', GOFLAGS='')
+    if offline:
+        env.update(GOPROXY='off', GOSUMDB='off')
+    if subprocess.check_output([go, 'env', 'GOTELEMETRY'], env=env, text=True).strip() != 'off':
+        raise RuntimeError('Go preparation telemetry is not disabled')
+    module = config['module'] + '@' + config['version']
+    info = json.loads(subprocess.check_output([go, 'mod', 'download', '-json', module], env=env))
+    if info['Sum'] != config['module_sum']:
+        raise RuntimeError('gopls module checksum changed')
+    source = work / 'gopls-source'
+    if source.exists():
+        # Module-cache directories are read-only. Change only the temporary
+        # source copy, including an earlier copy left by a previous build.
+        for directory in [source, *source.rglob('*')]:
+            if directory.is_dir() and not directory.is_symlink():
+                directory.chmod(directory.stat().st_mode | 0o200)
+        shutil.rmtree(source)
+    shutil.copytree(info['Dir'], source)
+    for directory in [source, *source.rglob('*')]:
+        if directory.is_dir() and not directory.is_symlink():
+            directory.chmod(directory.stat().st_mode | 0o200)
+    if sha256(source / config['source_file']) != config['source_file_sha256']:
+        raise RuntimeError('gopls upstream file checksum mismatch')
+    subprocess.run([os.sys.executable, str(patcher), str(source)], check=True)
+    if sha256(source / config['source_file']) != config['patched_file_sha256']:
+        raise RuntimeError('gopls patched file checksum mismatch')
+    for osname, arch, platform in [('darwin', 'arm64', 'darwin-arm64'), ('linux', 'amd64', 'linux-x86_64')]:
+        output = work / 'gopls-build' / platform / 'bin/gopls'
+        output.parent.mkdir(parents=True, exist_ok=True)
+        env.update(GOOS=osname, GOARCH=arch)
+        subprocess.run([go, 'build', *config['flags'], '-o', str(output), '.'], cwd=source, env=env, check=True)
+        output.chmod(0o755)
+    for platform in ('darwin-arm64', 'linux-x86_64'):
+        payload = next(p for p in manifest['payloads'] if p['platform'] == platform and p['id'].startswith('gopls-'))
+        archive(work / 'gopls-build' / platform, ROOT / payload['parts'][0])
+
+
 def rebuild(work, manifest):
     work.mkdir(parents=True, exist_ok=True)
     downloads = work / 'downloads'
@@ -331,32 +412,9 @@ def rebuild(work, manifest):
     subprocess.run(['npm', 'ci', '--prefix', str(js), '--ignore-scripts', '--omit=dev', '--no-audit', '--no-fund'], env=env, check=True)
     shutil.rmtree(js / 'node_modules/.bin', ignore_errors=True)
     archive(js, ROOT / 'payloads/javascript-language-servers.tar.gz')
-    host = 'darwin-arm64' if os.uname().sysname == 'Darwin' and os.uname().machine == 'arm64' else 'linux-x86_64'
-    host_go = work / 'go-host'
-    extract(sources[('go', host)], host_go)
-    go = str(host_go / 'go/bin/go')
-    env.update(GOPATH=str(work / 'gopath'), GOMODCACHE=str(work / 'gomodcache'), GOCACHE=str(work / 'go-cache'), XDG_CONFIG_HOME=str(work / 'config'), GOTELEMETRY='off', GOENV='off', GOTOOLCHAIN='local', CGO_ENABLED='0', GOBIN='')
-    module = manifest['gopls_build']['module'] + '@' + manifest['gopls_build']['version']
-    info = json.loads(subprocess.check_output([go, 'mod', 'download', '-json', module], env=env))
-    if info['Sum'] != manifest['gopls_build']['module_sum']:
-        raise RuntimeError('gopls module checksum changed')
-    for osname, arch, platform in [('darwin', 'arm64', 'darwin-arm64'), ('linux', 'amd64', 'linux-x86_64')]:
-        output = work / platform / 'bin/gopls'
-        output.parent.mkdir(parents=True, exist_ok=True)
-        env.update(GOOS=osname, GOARCH=arch)
-        subprocess.run([go, 'install', '-trimpath', '-ldflags=-s -w', module], env=env, check=True)
-        install = work / 'gopath/bin'
-        if platform != host:
-            install = install / (osname + '_' + arch)
-        shutil.copyfile(install / 'gopls', output)
-        output.chmod(0o755)
-        archive(work / platform, ROOT / 'payloads' / ('gopls-' + manifest['gopls_build']['version'] + '-' + platform + '.tar.gz'))
+    build_gopls(work, manifest)
     collect_licenses(work)
-    for payload in manifest['payloads']:
-        payload['sha256'] = sha256(ROOT / payload['parts'][0])
-        payload['size_bytes'] = (ROOT / payload['parts'][0]).stat().st_size
-    MANIFEST.write_text(json.dumps(manifest, indent=2) + '\n')
-    write_payloads_tsv(manifest)
+    record_payloads(manifest)
     print('Rebuilt offline payloads; review the manifest and archive changes before publication.')
 
 
@@ -364,6 +422,9 @@ def verify(manifest):
     expected_tsv = payloads_tsv(manifest)
     if not PAYLOADS_TSV.exists() or PAYLOADS_TSV.read_bytes() != expected_tsv:
         raise RuntimeError('tools/payloads.tsv differs from the JSON manifest; run tools/prepare-bundle.py --write-payloads-tsv')
+    patch = manifest['gopls_build']
+    if sha256(ROOT / patch['patch_script']) != patch['patch_script_sha256']:
+        raise RuntimeError('gopls patch helper checksum mismatch')
     total = 0
     for payload in manifest['payloads']:
         digest = hashlib.sha256()
@@ -390,10 +451,14 @@ def main():
     actions = parser.add_mutually_exclusive_group(required=True)
     actions.add_argument('--verify', action='store_true')
     actions.add_argument('--rebuild', action='store_true')
+    actions.add_argument('--rebuild-gopls', action='store_true', help='rebuild only the two patched gopls archives, leaving other payloads and Vim sources unchanged')
     actions.add_argument('--write-payloads-tsv', action='store_true', help='regenerate the Bash-readable payload table from the JSON manifest, without downloads')
     actions.add_argument('--collect-licenses', action='store_true', help=argparse.SUPPRESS)
     parser.add_argument('--work-dir', type=Path)
+    parser.add_argument('--offline', action='store_true', help='with --rebuild-gopls, use only the checked-in SDK and an already populated task-local Go module cache')
     args = parser.parse_args()
+    if args.offline and not args.rebuild_gopls:
+        parser.error('--offline is supported only with --rebuild-gopls')
     manifest = json.loads(MANIFEST.read_text())
     payloads_tsv(manifest)  # Reject unsupported or unsafe rows before mutation.
     if args.write_payloads_tsv:
@@ -402,7 +467,12 @@ def main():
         verify(manifest)
     else:
         work = args.work_dir or Path(tempfile.mkdtemp(prefix='vim-config-bundle-'))
-        if args.collect_licenses:
+        if args.rebuild_gopls:
+            build_gopls(work, manifest, offline=args.offline)
+            record_payloads(manifest, {p['id'] for p in manifest['payloads'] if p['id'].startswith('gopls-')})
+            verify(manifest)
+            print('Rebuilt the two patched gopls archives; all other payloads were left untouched.')
+        elif args.collect_licenses:
             collect_licenses(work)
         else:
             rebuild(work, manifest)

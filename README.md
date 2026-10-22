@@ -24,7 +24,7 @@ Choose the profile for that host:
 
 Setup uses Bash (including macOS's bundled Bash 3.2), tar, and either `sha256sum` or `openssl`. It verifies and unpacks only the current platform plus shared JavaScript servers into ignored `.state/tools`. About 284 MiB of compressed payloads are checked in for both platforms; unpacking a platform needs considerably more space. Setup writes inside this checkout. It does not alter your existing Vim configuration unless you explicitly add `--link-home`; that option backs up `~/.vimrc` before linking this configuration.
 
-Use `./bin/vim-config --profile container file.php` for a one-off profile override. Keep the checkout at its installed location when using the home symlink. Re-run setup after updating the checked-out tools. Vim startup never runs setup or downloads tools.
+Use `./bin/vim-config --profile container file.php` for a one-off profile override. Keep the checkout at its installed location when using the home symlink. Close Vim before updating and re-running setup so running servers keep the matching tool files. Vim startup never runs setup or downloads tools.
 
 ## Editing
 
@@ -46,6 +46,8 @@ Go toolchains and module downloads are disabled automatically (`GOTOOLCHAIN=loca
 TypeScript automatic type acquisition and JSON remote schema downloads are disabled. Add desired type packages and schemas to the project explicitly. SQL has Vim syntax support; database-aware schema completion is a later, dialect-specific addition.
 
 The Linux Node bundle includes private C++ runtime libraries so it does not depend on an apt-installed `libstdc++`. The system glibc/loader is still required; the packaged baseline is Debian 12 / glibc 2.36 or newer. PHPantom and gopls use static Linux builds. These packaging choices do not bypass seccomp restrictions.
+
+The bundled gopls includes a small compatibility patch for containers without `/proc/self/exe`. When its normal executable lookup fails, it hashes the exact binary path supplied by this configuration. The persistent cache still uses a hash of the executable's contents. The Go launcher also sets the bundled SDK's `GOROOT` explicitly, so SDK discovery works without procfs. These changes are precompiled into the checked-in bundle; destination hosts do not build anything.
 
 ## Large PHP files
 
@@ -73,4 +75,4 @@ Rainbow CSV provides CSV/TSV colours, column identification and manual validatio
 
 The doctor uses a temporary home, workspaces and caches, with Go telemetry disabled for those probes. Ordinary gopls sessions put their persistent index in ignored `.state/cache/gopls`; set `GOPLSCACHE` to override it. Other runtime caches retain their usual locations. Ordinary Go telemetry follows its configured mode; `go telemetry off` disables collection and uploading. `GOTELEMETRY` is a read-only reporting variable, so exporting `GOTELEMETRY=off` does not change that mode. See [Go's telemetry documentation](https://go.dev/doc/telemetry).
 
-The installer and file finder are Bash scripts; no custom Perl helper is used. For maintainers, `python3 tools/prepare-bundle.py --verify` checks included payloads and that the Bash-readable `tools/payloads.tsv` matches the JSON manifest. `--rebuild` is an explicit online preparation operation on a build-capable machine, not part of installation. The small downstream LSP integration hooks are reapplied by `tools/patch-lsp.py`.
+The installer and file finder are Bash scripts; no custom Perl helper is used. For maintainers, `python3 tools/prepare-bundle.py --verify` checks included payloads and that the Bash-readable `tools/payloads.tsv` matches the JSON manifest. `--rebuild` is an explicit online preparation operation on a build-capable machine, not part of installation. `--rebuild-gopls` rebuilds only the two gopls archives; add `--offline --work-dir DIR` when that preparation directory already has the pinned Go module cache. Downstream patches are reapplied by `tools/patch-lsp.py` and `tools/patch-gopls.py`.

@@ -15,6 +15,7 @@ let s:env = {
       \ 'GOMODCACHE': s:temp . '/gomodcache',
       \ 'GOPATH': s:temp . '/gopath',
       \ 'GOPLSCACHE': s:temp . '/gopls-cache',
+      \ 'VIM_CONFIG_GOPLS_EXECUTABLE': s:tools . '/bin/gopls',
       \ 'GOROOT': s:tools . '/go',
       \ 'GOTOOLCHAIN': 'local', 'GOPROXY': 'off', 'GOSUMDB': 'off',
       \ 'PATH': s:tools . '/go/bin:' . s:tools . '/bin:' . $PATH,

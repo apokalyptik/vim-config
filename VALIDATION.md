@@ -48,6 +48,8 @@ Verified assertions:
 * A `strace -f -e trace=%file` audit of the complete launcher and its descendants found **no file syscall addressing original `/nfs`**, including during bootstrap. This tests the default top-level exclusion without an actual NFS server.
 * Packaged Linux PHPantom and gopls start through the launcher; packaged Node executes JavaScript with the guest's global C++ runtime libraries deliberately absent. The guest uses glibc 2.36 and Node's private included runtime libraries.
 
+An additional regression unmounts `/proc` in a separate guest mount namespace and runs as UID 1000. The original gopls reproduces the container's exact `can't hash gopls executable: readlink /proc/self/exe: no such file or directory` fatal error. The checked-in patched archive, started through the actual `bin/language-server` launcher, initializes and resolves `fmt.Println` into the bundled SDK. The client supplies neither `GOROOT` nor the fallback path, exercising the launcher's configuration. The recorded `exe.sha256` matches the actual binary's SHA-256 (`5d4f220f427060b91aeac48d618a002b921940d795ba828d3b81ed9191edc13b`), including the cache-directory prefix. Missing, relative, nonexistent and unreadable fallback paths are rejected. The same run passes the existing wrapper, stdin, cleanup and zero-touch audit checks.
+
 Important boundaries:
 
 * The guest uses a mounted fixture at `/nfs`, not the user's live NFS export. No live-NFS RPC trace was performed.
@@ -58,7 +60,7 @@ Important boundaries:
 
 ## Still required on the user's hosts
 
-The first Work Container report (Vim 9.1.1244, glibc 2.41, kernel 6.12.107+deb13-amd64) confirms PHPantom, Node JavaScript execution, Go SDK and gopls version startup, plus PHP LSP initialization and definition lookup. Gopls LSP initialization fails almost immediately. The original doctor omitted the error details for that step; the updated doctor reports them. The cause remains unconfirmed, and Go IDE support on that host has not passed.
+The Work Container report (Vim 9.1.1244, glibc 2.41, kernel 6.12.107+deb13-amd64) confirms PHPantom, Node JavaScript execution, Go SDK and gopls version startup, plus PHP LSP initialization and definition lookup. The updated doctor's stderr identifies the immediate gopls failure: its persistent-cache setup cannot hash its own executable because `readlink /proc/self/exe` returns `ENOENT`. The bundled compatibility patch supplies an explicit executable-path fallback and preserves content hashing. Go IDE support on the actual host still needs a repeat doctor run with the rebuilt bundle.
 
 Run `bin/setup` and `bin/vim-config-doctor --profile PROFILE --lsp` on each relevant host. In particular:
 
@@ -68,3 +70,5 @@ Run `bin/setup` and `bin/vim-config-doctor --profile PROFILE --lsp` on each rele
 * Confirm iTerm function-key delivery over the user's SSH path; `:VimMenu` is available if F1 is intercepted.
 
 Reproducible local checks: `tests/run.sh`, `python3 tests/terminal.py`, `python3 tests/terminal.py tests/benchmark-vim.vim`. `tests/qemu-helper.sh` accepts explicitly prepared kernel/BusyBox/Debian package inputs; its fixture inputs and hashes are kept in the ignored local test workspace rather than shipping a VM in the editor bundle.
+
+For the Linux procfs regression, add `VIM_CONFIG_QEMU_GOPLS_NO_PROC=1` and set `VIM_CONFIG_QEMU_GOPLS_BASELINE` to the original unpatched Linux gopls executable (available from the payload at commit `ec2abe6`). The fixture uses the checked-in patched archive unless an explicit test-only binary override is supplied; the verified run used the archive without an override.

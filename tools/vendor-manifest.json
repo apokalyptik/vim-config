@@ -30,8 +30,8 @@
       "parts": [
         "payloads/gopls-v0.24.0-darwin-arm64.tar.gz"
       ],
-      "sha256": "31e07de904273f050cbeecd5eb992845fcb0e6b1ffd484351c193842ee1e047c",
-      "size_bytes": 11029688,
+      "sha256": "79e39a5e40a7466c8846e584120b2f56262d6e00515fc467f92734bd02b7e7da",
+      "size_bytes": 11030427,
       "destination": "darwin-arm64",
       "strip_components": 0
     },
@@ -41,8 +41,8 @@
       "parts": [
         "payloads/gopls-v0.24.0-linux-x86_64.tar.gz"
       ],
-      "sha256": "1f2c318e6d0770cbfe35050eb10b164650439c75188b78e4b645fe26d143665b",
-      "size_bytes": 11730515,
+      "sha256": "3ace90689c233cf2d406e25a137756552801820cac7f987146488a50a7ed1ffb",
+      "size_bytes": 11730732,
       "destination": "linux-x86_64",
       "strip_components": 0
     },
@@ -206,10 +206,19 @@
     "module_sum": "h1:nPO/LffYa4sP62Ueuema5PPnZPGaZjGl+vZGvbTek4g=",
     "CGO_ENABLED": "0",
     "flags": [
+      "-mod=readonly",
+      "-buildvcs=false",
       "-trimpath",
-      "-ldflags=-s -w"
+      "-ldflags=-s -w -X main.version=v0.24.0+vim-config.1"
     ],
-    "command": "go install -trimpath -ldflags=\"-s -w\" golang.org/x/tools/gopls@v0.24.0"
+    "command": "go build -mod=readonly -buildvcs=false -trimpath -ldflags=\"-s -w -X main.version=v0.24.0+vim-config.1\" -o OUTPUT .",
+    "output_version": "v0.24.0+vim-config.1",
+    "source_file": "internal/filecache/filecache.go",
+    "source_file_sha256": "7ad9c9d8ca9ad0e7486bfdbf43068e73c7e34597ee5248f4f289e1aa7cfb2dea",
+    "patched_file_sha256": "785d2f67784731c472b272c82099e3af9157516873aa978c4d26b004de962aa1",
+    "patch_script": "tools/patch-gopls.py",
+    "patch_script_sha256": "7568cca1256df53f5ef0d2d51c50682bd3e31667ac58506d57878060dd68ce86",
+    "fallback_environment": "VIM_CONFIG_GOPLS_EXECUTABLE"
   },
   "tools": {
     "phpantom": "{platform}/bin/phpantom_lsp",
@@ -227,6 +236,10 @@
     {
       "path": "tools/patch-lsp.py",
       "description": "Gate LSP root discovery by project safety policy and expose per-buffer guarded attach/detach functions."
+    },
+    {
+      "path": "tools/patch-gopls.py",
+      "description": "When /proc executable discovery fails, hash the actual bundled binary at the explicitly supplied absolute launcher path."
     }
   ],
   "notice_indexes": [

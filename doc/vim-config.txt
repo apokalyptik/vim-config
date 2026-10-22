@@ -44,6 +44,10 @@ downloads are disabled. Project dependency content must already be available.
 Cgo needs project-specific compiler/native dependencies. SQL has syntax support;
 database-aware SQL tooling is not yet configured.
 
+The bundled gopls has a compatibility patch for missing /proc/self/exe. Its
+cache still hashes the binary contents. Close Vim before updating tools; pull
+the checkout, re-run bin/setup for your profile, and restart Vim.
+
 README.md has detailed deployment, exclusions, tool licences and limitations.
 VALIDATION.md records measured tests and distinguishes local/VM/real-host results.
 
