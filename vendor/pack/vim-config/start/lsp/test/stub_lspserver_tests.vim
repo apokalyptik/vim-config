@@ -1,0 +1,1598 @@
+vim9script
+# Unit tests using a stub language server
+
+import '../autoload/lsp/lspserver.vim' as lserver
+import '../autoload/lsp/lsp.vim' as lsp
+import '../autoload/lsp/codeaction.vim' as codeaction
+import '../autoload/lsp/signature.vim' as signature
+import '../autoload/lsp/completion.vim' as completion
+import '../autoload/lsp/handlers.vim' as handlers
+import '../autoload/lsp/diag.vim' as diag
+import '../autoload/lsp/util.vim' as util
+import '../autoload/lsp/buffer.vim' as buf
+
+def CaptureNotification(notifications: list<dict<any>>, method: string,
+			params: any = {}): void
+  notifications->add({method: method, params: params->deepcopy()})
+enddef
+
+def StubDiagHandler(diags: list<dict<any>>): list<dict<any>>
+  return diags
+enddef
+
+def MakeTestLspServer(notifications: list<dict<any>>): dict<any>
+  var lspserver = lserver.NewLspServer({
+	name: 'test',
+	path: 'test-lsp',
+	args: [],
+	customNotificationHandlers: {},
+	customRequestHandlers: {},
+	debug: false,
+	features: {},
+	forceOffsetEncoding: '',
+	initializationOptions: {},
+	languageId: '',
+	processDiagHandler: StubDiagHandler,
+	rootSearch: [],
+	runIfSearch: [],
+	runUnlessSearch: [],
+	syncInit: false,
+	traceLevel: 'off',
+	workspaceConfig: {}
+      })
+  lspserver.textDocumentSync = 2
+  # Not set by NewLspServer() -- only assigned while processing the
+  # "initialize" response -- but the incremental-sync code path needs it.
+  lspserver.posEncoding = 32
+  lspserver.sendNotification = function(CaptureNotification, [notifications])
+  return lspserver
+enddef
+
+def MakeCodeActionServer(name: string, actions: list<dict<any>>,
+		execCmds: list<string>): dict<any>
+  var lspserver = MakeTestLspServer([])
+  lspserver.name = name
+  lspserver.running = true
+  lspserver.ready = true
+  lspserver.isCodeActionProvider = true
+  lspserver.featureEnabled = (_feature: string): bool => true
+  lspserver.codeActionAsync = (_, _, _, query, Cbfunc) => {
+    Cbfunc(lspserver, actions->deepcopy(), query, {})
+  }
+  lspserver.executeCommand = (cmd: dict<any>) => {
+    execCmds->add(cmd->get('command', ''))
+  }
+  return lspserver
+enddef
+
+def SeedBufferDiagnostics(diags: list<dict<any>>): void
+  g:LspOptionsSet({autoHighlightDiags: false})
+  var diagSrv = MakeTestLspServer([])
+  diagSrv.features = {diagnostics: true}
+  diagSrv.featureEnabled = (_) => true
+  diag.DiagNotification(diagSrv, util.LspBufnrToUri(bufnr()), diags, 'push')
+enddef
+
+def ClearBufferDiagnostics(): void
+  diag.DiagRemoveFile(bufnr())
+  g:LspOptionsSet({autoHighlightDiags: true})
+enddef
+
+def CaptureResponse(responses: list<dict<any>>, request: dict<any>,
+      result: any, error: dict<any>): void
+  responses->add({id: request.id, result: result, error: error->deepcopy()})
+enddef
+
+def CaptureMessage(messages: list<dict<any>>, msg: dict<any>): void
+  messages->add(msg->deepcopy())
+enddef
+
+def MakeRequestTestLspServer(responses: list<dict<any>>): dict<any>
+  var lspserver = MakeTestLspServer([])
+  lspserver.sendResponse = function(CaptureResponse, [responses])
+  return lspserver
+enddef
+
+def AssertRequestError(lspserver: dict<any>, responses: list<dict<any>>,
+          request: dict<any>, code: number)
+  responses->filter('0')
+  lspserver.processRequest(request)
+  assert_equal(1, responses->len())
+  assert_equal(request.id, responses[0].id)
+  assert_equal(code, responses[0].error.code)
+enddef
+
+def g:Test_RequestValidation_InvalidRequest()
+  var responses: list<dict<any>> = []
+  var lspserver = MakeRequestTestLspServer(responses)
+
+  # -32600 InvalidRequest: object params are required but missing.
+  AssertRequestError(lspserver, responses,
+    {id: 1, method: 'workspace/applyEdit'}, -32600)
+  AssertRequestError(lspserver, responses,
+    {id: 2, method: 'workspace/configuration'}, -32600)
+  AssertRequestError(lspserver, responses,
+    {id: 3, method: 'window/showMessageRequest'}, -32600)
+
+  AssertRequestError(lspserver, responses,
+    {id: 4, method: 'client/registerCapability'}, -32600)
+  AssertRequestError(lspserver, responses,
+    {id: 5, method: 'client/unregisterCapability'}, -32600)
+  AssertRequestError(lspserver, responses,
+    {id: 6, method: 'window/workDoneProgress/create'}, -32600)
+enddef
+
+def g:Test_RequestValidation_InvalidParamsAndMethodNotFound()
+  var responses: list<dict<any>> = []
+  var lspserver = MakeRequestTestLspServer(responses)
+
+  # -32602 InvalidParams: params type/shape is invalid.
+  AssertRequestError(lspserver, responses,
+    {id: 10, method: 'workspace/applyEdit', params: []}, -32602)
+  AssertRequestError(lspserver, responses,
+    {id: 11, method: 'workspace/applyEdit', params: {}}, -32602)
+  AssertRequestError(lspserver, responses,
+    {id: 12, method: 'workspace/configuration', params: {}}, -32602)
+  AssertRequestError(lspserver, responses,
+    {id: 13, method: 'workspace/configuration', params: {items: {}}}, -32602)
+  AssertRequestError(lspserver, responses,
+    {id: 14, method: 'window/showMessageRequest', params: {}}, -32602)
+  AssertRequestError(lspserver, responses,
+    {id: 15, method: 'window/showMessageRequest', params: {message: 99}}, -32602)
+  AssertRequestError(lspserver, responses,
+    {id: 16, method: 'window/showMessageRequest', params: {message: 'Pick', actions: {}}}, -32602)
+  AssertRequestError(lspserver, responses,
+    {id: 17, method: 'window/showMessageRequest', params: {message: 'Pick', actions: [{}]}}, -32602)
+  AssertRequestError(lspserver, responses,
+    {id: 18, method: 'window/showMessageRequest', params: {message: 'Pick', actions: [{title: 1}]}}, -32602)
+  AssertRequestError(lspserver, responses,
+    {id: 19, method: 'workspace/workspaceFolders', params: {foo: 1}}, -32602)
+  AssertRequestError(lspserver, responses,
+    {id: 20, method: 'workspace/diagnostic/refresh', params: {foo: 1}}, -32602)
+  AssertRequestError(lspserver, responses,
+    {id: 21, method: 'client/registerCapability', params: {}}, -32602)
+  AssertRequestError(lspserver, responses,
+    {id: 22, method: 'client/registerCapability', params: {registrations: {}}}, -32602)
+  AssertRequestError(lspserver, responses,
+    {id: 23, method: 'client/unregisterCapability', params: {}}, -32602)
+  AssertRequestError(lspserver, responses,
+    {id: 24, method: 'client/unregisterCapability', params: {unregisterations: {}}}, -32602)
+  AssertRequestError(lspserver, responses,
+    {id: 25, method: 'window/workDoneProgress/create', params: {}}, -32602)
+
+  # Unknown method should return MethodNotFound.
+  AssertRequestError(lspserver, responses,
+    {id: 26, method: 'workspace/notARealMethod', params: {}}, -32601)
+enddef
+
+def g:Test_ProcessRequest_CustomHandlerException_ReturnsInternalError()
+  var responses: list<dict<any>> = []
+  var lspserver = MakeRequestTestLspServer(responses)
+  lspserver.customRequestHandlers = {
+    'custom/fail': (_, _) => {
+      throw 'forced failure'
+    }
+  }
+
+  AssertRequestError(lspserver, responses,
+    {id: 27, method: 'custom/fail', params: {}}, -32603)
+enddef
+
+def AssertIgnoredUnknownResponse(lspserver: dict<any>, payload: dict<any>, id: string)
+  var traceMsgs: list<string> = []
+  lspserver.traceLog = (msg) => traceMsgs->add(msg)
+  lspserver.processRequest = (_, _) => assert_report('unexpected request dispatch')
+  lspserver.processNotif = (_, _) => assert_report('unexpected notification dispatch')
+
+  var beforeMessages = execute('messages')
+  lspserver.data = payload
+  lspserver.processMessage()
+
+  assert_equal(1, traceMsgs->len())
+  assert_match('Ignored response with unknown id from LSP server:', traceMsgs[0])
+
+  var afterMessages = execute('messages')
+  assert_equal(-1, afterMessages->stridx($'Unrecognized id in reponse received from LSP server: {id}'))
+  assert_equal(beforeMessages, afterMessages)
+enddef
+
+def g:Test_ProcessMessages_IgnoreUnknownResponseId_Result()
+  var lspserver = MakeTestLspServer([])
+  var unknownId = 'X-unknown-response-id-result'
+  AssertIgnoredUnknownResponse(lspserver,
+    {
+      jsonrpc: '2.0',
+      id: unknownId,
+      result: {}
+    }, unknownId)
+enddef
+
+def g:Test_ProcessMessages_IgnoreUnknownResponseId_Error()
+  var lspserver = MakeTestLspServer([])
+  var unknownId = 'X-unknown-response-id-error'
+  AssertIgnoredUnknownResponse(lspserver,
+    {
+      jsonrpc: '2.0',
+      id: unknownId,
+      error: {
+        code: -32601,
+        message: 'Method not found'
+      }
+    }, unknownId)
+enddef
+
+def g:Test_ProcessMessages_RejectsMessageMissingJsonRpc()
+  var lspserver = MakeTestLspServer([])
+  var traceMsgs: list<string> = []
+  lspserver.traceLog = (msg) => traceMsgs->add(msg)
+  lspserver.processRequest = (_, _) => assert_report('unexpected request dispatch')
+  lspserver.processNotif = (_, _) => assert_report('unexpected notification dispatch')
+
+  # Message without jsonrpc field should be dropped
+  lspserver.data = {
+    id: 1,
+    method: 'test/method'
+  }
+  lspserver.processMessage()
+
+  assert_equal(1, traceMsgs->len())
+  assert_match('Dropping message missing jsonrpc field:', traceMsgs[0])
+enddef
+
+def g:Test_ProcessMessages_RejectsMessageWithInvalidJsonRpcVersion()
+  var lspserver = MakeTestLspServer([])
+  var traceMsgs: list<string> = []
+  lspserver.traceLog = (msg) => traceMsgs->add(msg)
+  lspserver.processRequest = (_, _) => assert_report('unexpected request dispatch')
+  lspserver.processNotif = (_, _) => assert_report('unexpected notification dispatch')
+
+  # Message with wrong jsonrpc version should be dropped
+  lspserver.data = {
+    jsonrpc: '1.0',
+    id: 1,
+    method: 'test/method'
+  }
+  lspserver.processMessage()
+
+  assert_equal(1, traceMsgs->len())
+  assert_match('Dropping message with invalid jsonrpc version: 1.0', traceMsgs[0])
+enddef
+
+def g:Test_ProcessMessages_AcceptsValidJsonRpcVersion()
+  var lspserver = MakeTestLspServer([])
+  var traceMsgs: list<string> = []
+  var requestsProcessed: number = 0
+  lspserver.traceLog = (msg) => traceMsgs->add(msg)
+  lspserver.processRequest = (_) => {
+    requestsProcessed += 1
+  }
+  lspserver.processNotif = (_, _) => assert_report('unexpected notification dispatch')
+
+  # Message with correct jsonrpc version should be processed
+  lspserver.data = {
+    jsonrpc: '2.0',
+    id: 1,
+    method: 'test/method'
+  }
+  lspserver.processMessage()
+
+  assert_equal(1, requestsProcessed)
+  assert_equal(0, traceMsgs->len())
+enddef
+
+def g:Test_PullDiagnostics_RetriggersServerCancelledRequest()
+  silent! edit XPullDiagnosticsRetrigger.rs
+  setline(1, ['fn main() {}'])
+
+  var queued: list<number> = []
+  var rpcOpts: list<dict<any>> = []
+  def MockDiagnosticRpc(_method: string, _params: any,
+                        opts: dict<any> = {}): dict<any>
+    rpcOpts->add(opts->deepcopy())
+    return {
+      error: {
+        code: -32802,
+        message: 'server cancelled the request',
+        data: {
+          retriggerRequest: true
+        }
+      }
+    }
+  enddef
+
+  var lspserver = MakeTestLspServer([])
+  lspserver.running = true
+  lspserver.ready = true
+  lspserver.isDiagnosticsProvider = true
+  lspserver.features = {diagnostics: true}
+  lspserver.featureEnabled = (_) => true
+  lspserver.queuePullDiagnostics = (bnr: number) => queued->add(bnr)
+  lspserver.rpc = MockDiagnosticRpc
+
+  buf.BufLspServerSet(bufnr(), lspserver)
+  lspserver.pullDiagnostics(bufnr())
+
+  assert_equal([{handleError: false}], rpcOpts)
+  assert_equal([bufnr()], queued)
+
+  buf.BufLspServerRemove(bufnr(), lspserver)
+  :%bw!
+enddef
+
+def g:Test_DiagNotification_PushAndPull_AreBothRetained()
+  g:LspOptionsSet({autoHighlightDiags: false})
+  silent! edit XPushPullDiagnosticsRetained.rs
+  setline(1, ['fn main() {}'])
+
+  var lspserver = MakeTestLspServer([])
+  lspserver.features = {diagnostics: true}
+  lspserver.featureEnabled = (_) => true
+
+  var uri = util.LspBufnrToUri(bufnr())
+  var pullDiag = {
+    range: {
+      start: {line: 0, character: 0},
+      end: {line: 0, character: 2}
+    },
+    code: 'E001',
+    message: 'pull diagnostic'
+  }
+  var pushDiag = {
+    range: {
+      start: {line: 0, character: 5},
+      end: {line: 0, character: 7}
+    },
+    code: 'W001',
+    message: 'push diagnostic'
+  }
+
+  diag.DiagNotification(lspserver, uri, [pullDiag], 'pull')
+  diag.DiagNotification(lspserver, uri, [pushDiag], 'push')
+
+  var allDiags = diag.GetDiagsForBuf(bufnr())
+  assert_equal(2, allDiags->len())
+  assert_equal('pull diagnostic', allDiags[0].message)
+  assert_equal('push diagnostic', allDiags[1].message)
+
+  # Clearing push diagnostics must not clear previously pulled diagnostics.
+  diag.DiagNotification(lspserver, uri, [], 'push')
+  allDiags = diag.GetDiagsForBuf(bufnr())
+  assert_equal(1, allDiags->len())
+  assert_equal('pull diagnostic', allDiags[0].message)
+
+  diag.DiagRemoveFile(bufnr())
+  g:LspOptionsSet({autoHighlightDiags: true})
+  :%bw!
+enddef
+
+def g:Test_DiagNotification_DeduplicatesAcrossPushAndPull()
+  g:LspOptionsSet({autoHighlightDiags: false})
+  silent! edit XPushPullDiagnosticsDedup.rs
+  setline(1, ['fn main() {}'])
+
+  var lspserver = MakeTestLspServer([])
+  lspserver.features = {diagnostics: true}
+  lspserver.featureEnabled = (_) => true
+
+  var uri = util.LspBufnrToUri(bufnr())
+  var sharedDiag = {
+    range: {
+      start: {line: 0, character: 1},
+      end: {line: 0, character: 3}
+    },
+    code: 'DUP',
+    message: 'duplicate across channels'
+  }
+  var pushOnlyDiag = {
+    range: {
+      start: {line: 0, character: 8},
+      end: {line: 0, character: 10}
+    },
+    code: 'PUSH',
+    message: 'push only'
+  }
+
+  diag.DiagNotification(lspserver, uri, [sharedDiag], 'pull')
+  diag.DiagNotification(lspserver, uri, [sharedDiag, pushOnlyDiag], 'push')
+
+  var allDiags = diag.GetDiagsForBuf(bufnr())
+  assert_equal(2, allDiags->len())
+  assert_equal('duplicate across channels', allDiags[0].message)
+  assert_equal('push only', allDiags[1].message)
+
+  diag.DiagRemoveFile(bufnr())
+  g:LspOptionsSet({autoHighlightDiags: true})
+  :%bw!
+enddef
+
+def g:Test_ProcessNotif_PublishDiagnostics_NotIgnoredForPullCapableServer()
+  g:LspOptionsSet({autoHighlightDiags: false})
+  silent! edit XPushDiagnosticsForPullServer.rs
+  setline(1, ['fn main() {}'])
+
+  var lspserver = MakeTestLspServer([])
+  lspserver.isDiagnosticsProvider = true
+  lspserver.features = {diagnostics: true}
+  lspserver.featureEnabled = (_) => true
+
+  var uri = util.LspBufnrToUri(bufnr())
+  var reply = {
+    method: 'textDocument/publishDiagnostics',
+    params: {
+      uri: uri,
+      diagnostics: [{
+        range: {
+          start: {line: 0, character: 0},
+          end: {line: 0, character: 2}
+        },
+        code: 'PUSH',
+        message: 'publish diagnostics processed'
+      }]
+    }
+  }
+
+  handlers.ProcessNotif(lspserver, reply)
+
+  var allDiags = diag.GetDiagsForBuf(bufnr())
+  assert_equal(1, allDiags->len())
+  assert_equal('publish diagnostics processed', allDiags[0].message)
+
+  diag.DiagRemoveFile(bufnr())
+  g:LspOptionsSet({autoHighlightDiags: true})
+  :%bw!
+enddef
+
+def g:Test_ProcessMessages_InvalidRequest_NonStringMethod_WithId()
+  var lspserver = MakeTestLspServer([])
+  var outMessages: list<dict<any>> = []
+  var traceMsgs: list<string> = []
+  lspserver.sendMessage = (msg) => CaptureMessage(outMessages, msg)
+  lspserver.traceLog = (msg) => traceMsgs->add(msg)
+  lspserver.processRequest = (_, _) => assert_report('unexpected request dispatch')
+  lspserver.processNotif = (_, _) => assert_report('unexpected notification dispatch')
+
+  lspserver.data = {
+    jsonrpc: '2.0',
+    id: 99,
+    method: 1
+  }
+  lspserver.processMessage()
+
+  assert_equal(1, outMessages->len())
+  assert_equal('2.0', outMessages[0].jsonrpc)
+  assert_equal(99, outMessages[0].id)
+  assert_equal(-32600, outMessages[0].error.code)
+  assert_equal('Invalid request', outMessages[0].error.message)
+  assert_match('Dropping malformed message with non-string method:', traceMsgs[0])
+enddef
+
+def g:Test_ProcessMessages_InvalidRequest_InvalidIdType_RespondsWithNullId()
+  var lspserver = MakeTestLspServer([])
+  var outMessages: list<dict<any>> = []
+  var traceMsgs: list<string> = []
+  lspserver.sendMessage = (msg) => CaptureMessage(outMessages, msg)
+  lspserver.traceLog = (msg) => traceMsgs->add(msg)
+  lspserver.processRequest = (_, _) => assert_report('unexpected request dispatch')
+  lspserver.processNotif = (_, _) => assert_report('unexpected notification dispatch')
+
+  lspserver.data = {
+    jsonrpc: '2.0',
+    id: {},
+    method: 'workspace/configuration'
+  }
+  lspserver.processMessage()
+
+  assert_equal(1, outMessages->len())
+  assert_equal(null, outMessages[0].id)
+  assert_equal(-32600, outMessages[0].error.code)
+  assert_match('Dropping malformed request with invalid id type:', traceMsgs[0])
+enddef
+
+def g:Test_ProcessMessages_InvalidRequest_MissingMethod_WithId()
+  var lspserver = MakeTestLspServer([])
+  var outMessages: list<dict<any>> = []
+  var traceMsgs: list<string> = []
+  lspserver.sendMessage = (msg) => CaptureMessage(outMessages, msg)
+  lspserver.traceLog = (msg) => traceMsgs->add(msg)
+  lspserver.processRequest = (_, _) => assert_report('unexpected request dispatch')
+  lspserver.processNotif = (_, _) => assert_report('unexpected notification dispatch')
+
+  lspserver.data = {
+    jsonrpc: '2.0',
+    id: 'abc'
+  }
+  lspserver.processMessage()
+
+  assert_equal(1, outMessages->len())
+  assert_equal('abc', outMessages[0].id)
+  assert_equal(-32600, outMessages[0].error.code)
+  assert_match('Dropping malformed message missing method:', traceMsgs[0])
+enddef
+
+def g:Test_ProcessMessages_MalformedNotification_NoResponseSent()
+  var lspserver = MakeTestLspServer([])
+  var outMessages: list<dict<any>> = []
+  var traceMsgs: list<string> = []
+  lspserver.sendMessage = (msg) => CaptureMessage(outMessages, msg)
+  lspserver.traceLog = (msg) => traceMsgs->add(msg)
+  lspserver.processRequest = (_, _) => assert_report('unexpected request dispatch')
+  lspserver.processNotif = (_, _) => assert_report('unexpected notification dispatch')
+
+  lspserver.data = {
+    jsonrpc: '2.0',
+    method: {}
+  }
+  lspserver.processMessage()
+
+  assert_equal(0, outMessages->len())
+  assert_match('Dropping malformed message with non-string method:', traceMsgs[0])
+enddef
+
+def g:Test_ProcessMessages_MalformedResponse_BothResultAndError_Dropped()
+  var lspserver = MakeTestLspServer([])
+  var traceMsgs: list<string> = []
+  lspserver.traceLog = (msg) => traceMsgs->add(msg)
+  lspserver.processRequest = (_, _) => assert_report('unexpected request dispatch')
+  lspserver.processNotif = (_, _) => assert_report('unexpected notification dispatch')
+
+  lspserver.data = {
+    jsonrpc: '2.0',
+    id: 1,
+    result: {},
+    error: {code: -32603, message: 'Internal error'}
+  }
+  lspserver.processMessage()
+
+  assert_equal(1, traceMsgs->len())
+  assert_match('Dropping malformed response message:', traceMsgs[0])
+enddef
+
+def g:Test_LspAttached_AutocmdContextSingleServer()
+  silent! edit XLspAttachedSingleServer.txt
+  setline(1, ['single'])
+
+  g:attachEvents = 0
+  g:attachedFile = ''
+  g:attachedBufnr = -1
+  g:attachedServers = []
+  var expectedFile = expand('%:p')
+  var expectedBufnr = bufnr()
+  augroup LspAttachedTest
+    autocmd!
+    autocmd User LspAttached {
+      g:attachEvents += 1
+      g:attachedFile = get(g:, 'LspAttachedContext', {})->get('file', '')
+      g:attachedBufnr = get(g:, 'LspAttachedContext', {})->get('bufnr', -1)
+      g:attachedServers = get(g:, 'LspAttachedContext', {})->get('servers', [])->copy()
+    }
+  augroup END
+
+  var srv = MakeTestLspServer([])
+  buf.BufLspServerSet(bufnr(), srv)
+
+  lsp.FireLspAttachedAutocmd(bufnr())
+
+  assert_equal(1, g:attachEvents)
+  assert_equal(expectedFile, g:attachedFile)
+  assert_equal(expectedBufnr, g:attachedBufnr)
+  assert_equal(['test'], g:attachedServers)
+
+  buf.BufLspServerRemove(bufnr(), srv)
+  augroup LspAttachedTest
+    autocmd!
+  augroup END
+  unlet g:attachEvents
+  unlet g:attachedFile
+  unlet g:attachedBufnr
+  unlet g:attachedServers
+  :bw!
+enddef
+
+def g:Test_LspAttached_AutocmdContextMultipleServers()
+  silent! edit XLspAttachedMultipleServers.txt
+  setline(1, ['multiple'])
+
+  g:attachEvents = 0
+  g:attachedFile = ''
+  g:attachedBufnr = -1
+  g:attachedServers = []
+  var expectedFile = expand('%:p')
+  var expectedBufnr = bufnr()
+  augroup LspAttachedTest
+    autocmd!
+    autocmd User LspAttached {
+      g:attachEvents += 1
+      g:attachedFile = get(g:, 'LspAttachedContext', {})->get('file', '')
+      g:attachedBufnr = get(g:, 'LspAttachedContext', {})->get('bufnr', -1)
+      g:attachedServers = get(g:, 'LspAttachedContext', {})->get('servers', [])->copy()
+    }
+  augroup END
+
+  var srv1 = MakeTestLspServer([])
+  var srv2 = MakeTestLspServer([])
+  buf.BufLspServerSet(bufnr(), srv1)
+  buf.BufLspServerSet(bufnr(), srv2)
+
+  lsp.FireLspAttachedAutocmd(bufnr())
+
+  assert_equal(1, g:attachEvents)
+  assert_equal(expectedFile, g:attachedFile)
+  assert_equal(expectedBufnr, g:attachedBufnr)
+  assert_equal(['test', 'test'], g:attachedServers)
+
+  buf.BufLspServerRemove(bufnr(), srv1)
+  buf.BufLspServerRemove(bufnr(), srv2)
+  augroup LspAttachedTest
+    autocmd!
+  augroup END
+  unlet g:attachEvents
+  unlet g:attachedFile
+  unlet g:attachedBufnr
+  unlet g:attachedServers
+  :bw!
+enddef
+
+def g:Test_LspDetached_AutocmdFiresForSingleServer()
+  silent! edit XLspDetachedSingleServer.txt
+  setline(1, ['single'])
+
+  g:detachEvents = 0
+  g:detachedFile = ''
+  g:detachedBufnr = -1
+  g:detachedServers = []
+  var expectedFile = expand('%:p')
+  var expectedBufnr = bufnr()
+  augroup LspDetachedTest
+    autocmd!
+    autocmd User LspDetached {
+      g:detachEvents += 1
+      g:detachedFile = get(g:, 'LspDetachedContext', {})->get('file', '')
+      g:detachedBufnr = get(g:, 'LspDetachedContext', {})->get('bufnr', -1)
+      g:detachedServers = get(g:, 'LspDetachedContext', {})->get('servers', [])->copy()
+    }
+  augroup END
+
+  var srv = MakeTestLspServer([])
+  buf.BufLspServerSet(bufnr(), srv)
+
+  lsp.RemoveFile(bufnr())
+
+  assert_equal(1, g:detachEvents)
+  assert_equal(expectedFile, g:detachedFile)
+  assert_equal(expectedBufnr, g:detachedBufnr)
+  assert_equal(['test'], g:detachedServers)
+
+  augroup LspDetachedTest
+    autocmd!
+  augroup END
+  unlet g:detachEvents g:detachedFile g:detachedBufnr g:detachedServers
+  :bw!
+enddef
+
+def g:Test_LspDetached_AutocmdFiresOncePerBufferWithMultipleServers()
+  silent! edit XLspDetachedMultipleServers.txt
+  setline(1, ['multiple'])
+
+  g:detachEvents = 0
+  g:detachedFile = ''
+  g:detachedBufnr = -1
+  g:detachedServers = []
+  var expectedFile = expand('%:p')
+  var expectedBufnr = bufnr()
+  augroup LspDetachedTest
+    autocmd!
+    autocmd User LspDetached {
+      g:detachEvents += 1
+      g:detachedFile = get(g:, 'LspDetachedContext', {})->get('file', '')
+      g:detachedBufnr = get(g:, 'LspDetachedContext', {})->get('bufnr', -1)
+      g:detachedServers = get(g:, 'LspDetachedContext', {})->get('servers', [])->copy()
+    }
+  augroup END
+
+  var srv1 = MakeTestLspServer([])
+  var srv2 = MakeTestLspServer([])
+  buf.BufLspServerSet(bufnr(), srv1)
+  buf.BufLspServerSet(bufnr(), srv2)
+
+  lsp.RemoveFile(bufnr())
+
+  assert_equal(1, g:detachEvents)
+  assert_equal(expectedFile, g:detachedFile)
+  assert_equal(expectedBufnr, g:detachedBufnr)
+  assert_equal(['test', 'test'], g:detachedServers)
+
+  augroup LspDetachedTest
+    autocmd!
+  augroup END
+  unlet g:detachEvents g:detachedFile g:detachedBufnr g:detachedServers
+  :bw!
+enddef
+
+def g:Test_LspDetached_AutocmdNotFiredWithoutAttachedServer()
+  silent! edit XLspDetachedNoServer.txt
+  setline(1, ['none'])
+
+  g:detachEvents = 0
+  augroup LspDetachedTest
+    autocmd!
+    autocmd User LspDetached g:detachEvents += 1
+  augroup END
+
+  lsp.RemoveFile(bufnr())
+
+  assert_equal(0, g:detachEvents)
+
+  augroup LspDetachedTest
+    autocmd!
+  augroup END
+  unlet g:detachEvents
+  :bw!
+enddef
+
+def g:Test_ProcessApplyEditReq_SuccesssfulEdit()
+  var lspserver = MakeTestLspServer([])
+  var responses: list<dict<any>> = []
+  lspserver.sendResponse = (request, result, error) => CaptureResponse(responses, request, result, error)
+
+  lspserver.data = {
+    jsonrpc: '2.0',
+    id: 1,
+    method: 'workspace/applyEdit',
+    params: {
+      edit: {}
+    }
+  }
+  lspserver.processMessage()
+
+  assert_equal(1, responses->len())
+  assert_equal({applied: true}, responses[0].result)
+  assert_equal(1, responses[0].error->empty())
+enddef
+
+def g:Test_ProcessApplyEditReq_MissingEdit()
+  var lspserver = MakeTestLspServer([])
+  var responses: list<dict<any>> = []
+  lspserver.sendResponse = (request, result, error) => CaptureResponse(responses, request, result, error)
+
+  var request = {
+    jsonrpc: '2.0',
+    id: 1,
+    method: 'workspace/applyEdit',
+    params: {}
+  }
+
+  AssertRequestError(lspserver, responses, request, -32602)
+enddef
+
+def g:Test_ProcessShowMessageRequest_EmptyActions()
+  var lspserver = MakeTestLspServer([])
+  var responses: list<dict<any>> = []
+  lspserver.sendResponse = (request, result, error) => CaptureResponse(responses, request, result, error)
+
+  var request = {
+    jsonrpc: '2.0',
+    id: 1,
+    method: 'window/showMessageRequest',
+    params: {
+      message: 'Test message',
+      actions: []
+    }
+  }
+
+  AssertRequestError(lspserver, responses, request, -32602)
+enddef
+
+def g:Test_ProcessShowMessageRequest_ValidMessage()
+  var lspserver = MakeTestLspServer([])
+  var responses: list<dict<any>> = []
+  lspserver.sendResponse = (request, result, error) => CaptureResponse(responses, request, result, error)
+
+  lspserver.data = {
+    jsonrpc: '2.0',
+    id: 1,
+    method: 'window/showMessageRequest',
+    params: {
+      message: 'Test message'
+    }
+  }
+  lspserver.processMessage()
+
+  assert_equal(1, responses->len())
+  assert_equal(null, responses[0].result)
+  assert_equal(1, responses[0].error->empty())
+enddef
+
+def g:Test_CodeActionMenu_ServerLabelOnlyForDuplicateTitles()
+  g:LspOptionsSet({usePopupInCodeAction: true})
+
+  var actions = [
+    {
+      title: 'Duplicate action',
+      __lsp_server_id: 1,
+      __lsp_server_name: 'srvA',
+    },
+    {
+      title: 'Duplicate action',
+      __lsp_server_id: 2,
+      __lsp_server_name: 'srvB',
+    },
+    {
+      title: 'Unique action',
+      __lsp_server_id: 1,
+      __lsp_server_name: 'srvA',
+    }
+  ]
+
+  codeaction.ApplyCodeAction({}, actions, '')
+
+  g:LspOptionsSet({codeActionPopupDetails: 'short'})
+
+  var popups = popup_list()
+  assert_equal(1, popups->len())
+  var bnr = winbufnr(popups[0])
+  assert_equal([
+    ' 1. Duplicate action    [srvA] ',
+    ' 2. Duplicate action    [srvB] ',
+    ' 3. Unique action       [srvA] '
+  ], getbufline(bnr, 1, '$'))
+
+  popup_close(popups[0])
+  g:LspOptionsSet({usePopupInCodeAction: false})
+enddef
+
+def g:Test_ApplyCodeAction_RoutesToOriginServer()
+  silent! edit XCodeActionRouting.txt
+  setline(1, ['test'])
+
+  var execCmds1: list<string> = []
+  var execCmds2: list<string> = []
+  var srv1 = MakeTestLspServer([])
+  var srv2 = MakeTestLspServer([])
+
+  srv1.name = 'srv1'
+  srv1.running = true
+  srv1.ready = true
+  srv1.executeCommand = (cmd: dict<any>) => {
+    execCmds1->add(cmd->get('command', ''))
+  }
+
+  srv2.name = 'srv2'
+  srv2.running = true
+  srv2.ready = true
+  srv2.executeCommand = (cmd: dict<any>) => {
+    execCmds2->add(cmd->get('command', ''))
+  }
+
+  buf.BufLspServerSet(bufnr(), srv1)
+  buf.BufLspServerSet(bufnr(), srv2)
+
+  var actions = [
+    {
+      title: 'Same title',
+      command: 'from-server-1',
+      __lsp_server_id: srv1.id,
+      __lsp_server_name: srv1.name,
+    },
+    {
+      title: 'Same title',
+      command: 'from-server-2',
+      __lsp_server_id: srv2.id,
+      __lsp_server_name: srv2.name,
+    }
+  ]
+
+  codeaction.ApplyCodeAction({}, actions, '2')
+
+  assert_equal([], execCmds1)
+  assert_equal(['from-server-2'], execCmds2)
+
+  buf.BufLspServerRemove(bufnr(), srv1)
+  buf.BufLspServerRemove(bufnr(), srv2)
+  :bw!
+enddef
+
+def g:Test_ApplyCodeAction_RoutesToOriginServer_AfterBufferSwitch()
+  silent! edit XCodeActionRoutingOrigin.txt
+  setline(1, ['origin'])
+  var originBnr = bufnr()
+
+  var execCmds1: list<string> = []
+  var execCmds2: list<string> = []
+  var srv1 = MakeTestLspServer([])
+  var srv2 = MakeTestLspServer([])
+
+  srv1.name = 'srv1'
+  srv1.running = true
+  srv1.ready = true
+  srv1.executeCommand = (cmd: dict<any>) => {
+    execCmds1->add(cmd->get('command', ''))
+  }
+
+  srv2.name = 'srv2'
+  srv2.running = true
+  srv2.ready = true
+  srv2.executeCommand = (cmd: dict<any>) => {
+    execCmds2->add(cmd->get('command', ''))
+  }
+
+  buf.BufLspServerSet(originBnr, srv1)
+  buf.BufLspServerSet(originBnr, srv2)
+
+  var actions = [
+    {
+      title: 'Same title',
+      command: 'from-server-1',
+      __lsp_server_id: srv1.id,
+      __lsp_server_name: srv1.name,
+      __lsp_bufnr: originBnr,
+    },
+    {
+      title: 'Same title',
+      command: 'from-server-2',
+      __lsp_server_id: srv2.id,
+      __lsp_server_name: srv2.name,
+      __lsp_bufnr: originBnr,
+    }
+  ]
+
+  silent! edit! XCodeActionRoutingOther.txt
+  setline(1, ['other'])
+  assert_notequal(originBnr, bufnr())
+
+  codeaction.ApplyCodeAction({}, actions, '2')
+
+  assert_equal([], execCmds1)
+  assert_equal(['from-server-2'], execCmds2)
+
+  buf.BufLspServerRemove(originBnr, srv1)
+  buf.BufLspServerRemove(originBnr, srv2)
+  :%bw!
+enddef
+
+def g:Test_LspAutoFix_AppliesSinglePreferredAction()
+  silent! edit XLspAutoFixPreferred.txt
+  set filetype=text
+  setline(1, ['line'])
+  cursor(1, 1)
+
+  SeedBufferDiagnostics([
+    {
+      range: {
+        start: {line: 0, character: 0},
+        end: {line: 0, character: 1}
+      },
+      message: 'diag'
+    }
+  ])
+
+  var execCmds: list<string> = []
+  var actions = [
+    {
+      title: 'Apply preferred fix',
+      isPreferred: true,
+      command: 'preferred.fix',
+    },
+    {
+      title: 'Apply fallback fix',
+      command: 'fallback.fix',
+    }
+  ]
+  var srv = MakeCodeActionServer('srv1', actions, execCmds)
+  buf.BufLspServerSet(bufnr(), srv)
+
+  lsp.AutoFix()
+
+  assert_equal(['preferred.fix'], execCmds)
+  assert_equal([], popup_list())
+
+  ClearBufferDiagnostics()
+  buf.BufLspServerRemove(bufnr(), srv)
+  :bw!
+enddef
+
+def g:Test_LspAutoFix_PrefersPreferredActionForDiagnostic()
+  silent! edit XLspAutoFixPreferredSelection.txt
+  set filetype=text
+  setline(1, ['line'])
+  cursor(1, 1)
+
+  SeedBufferDiagnostics([
+    {
+      range: {
+        start: {line: 0, character: 0},
+        end: {line: 0, character: 1}
+      },
+      message: 'diag'
+    }
+  ])
+
+  var execCmds: list<string> = []
+  var actions = [
+    {
+      title: 'Preferred one',
+      isPreferred: true,
+      command: 'preferred.one',
+    },
+    {
+      title: 'Fallback',
+      command: 'fallback',
+    }
+  ]
+  var srv = MakeCodeActionServer('srv1', actions, execCmds)
+  buf.BufLspServerSet(bufnr(), srv)
+
+  lsp.AutoFix()
+
+  assert_equal(['preferred.one'], execCmds)
+  assert_equal([], popup_list())
+
+  ClearBufferDiagnostics()
+  buf.BufLspServerRemove(bufnr(), srv)
+  :bw!
+enddef
+
+def g:Test_LspAutoFix_NoPreferredMultipleActionsSkipsDiagnostic()
+  silent! edit XLspAutoFixNoPreferredMulti.txt
+  set filetype=text
+  setline(1, ['line'])
+  cursor(1, 1)
+
+  SeedBufferDiagnostics([
+    {
+      range: {
+        start: {line: 0, character: 0},
+        end: {line: 0, character: 1}
+      },
+      message: 'diag'
+    }
+  ])
+
+  var execCmds: list<string> = []
+  var actions = [
+    {
+      title: 'Fix A',
+      command: 'fix.a',
+    },
+    {
+      title: 'Fix B',
+      command: 'fix.b',
+    }
+  ]
+  var srv = MakeCodeActionServer('srv1', actions, execCmds)
+  buf.BufLspServerSet(bufnr(), srv)
+
+  lsp.AutoFix()
+
+  assert_equal([], execCmds)
+  assert_equal([], popup_list())
+
+  ClearBufferDiagnostics()
+  buf.BufLspServerRemove(bufnr(), srv)
+  :bw!
+enddef
+
+def g:Test_LspAutoFix_NoDiagnosticsShowsMessage()
+  silent! edit XLspAutoFixNoDiagnostics.txt
+  set filetype=text
+  setline(1, ['line'])
+  cursor(1, 1)
+
+  var execCmds: list<string> = []
+  var srv = MakeCodeActionServer('srv1', [], execCmds)
+  buf.BufLspServerSet(bufnr(), srv)
+
+  var beforeMessages = execute('messages')
+  lsp.AutoFix()
+  var afterMessages = execute('messages')
+
+  assert_true(afterMessages->len() >= beforeMessages->len())
+  assert_true(afterMessages->stridx('No diagnostics found in the selected range') >= 0)
+  assert_equal([], execCmds)
+
+  buf.BufLspServerRemove(bufnr(), srv)
+  :bw!
+enddef
+
+def g:Test_LspAutoFix_Range_MultipleDiagnostics()
+  silent! edit XLspAutoFixRange.txt
+  set filetype=text
+  setline(1, [
+    'a',
+    'b',
+    'c',
+    'd',
+    'e',
+  ])
+  # Simulate diagnostics on lines 2, 3, 4 (descending order)
+  var diags = [
+    {'range': {'start': {'line': 1, 'character': 0}, 'end': {'line': 1, 'character': 1}}, 'message': 'diag2'},
+    {'range': {'start': {'line': 2, 'character': 0}, 'end': {'line': 2, 'character': 1}}, 'message': 'diag3'},
+    {'range': {'start': {'line': 3, 'character': 0}, 'end': {'line': 3, 'character': 1}}, 'message': 'diag4'},
+  ]
+  SeedBufferDiagnostics(diags)
+
+  # Each line's code action returns a preferred action for that diagnostic.
+  var execCmds: list<string> = []
+  var srv = MakeCodeActionServer('srv1', [], execCmds)
+  srv.codeActionAsync = (_fname, line1, _line2, _query, Cbfunc) => {
+    var idx = line1 - 1
+    if idx >= 1 && idx <= 3
+      var diagnum = idx + 1
+      var acts = [{
+        title: 'Fix diag' .. diagnum,
+        isPreferred: true,
+        command: 'fix.diag' .. diagnum,
+        diagnostics: [{
+          range: {
+            start: {line: line1 - 1, character: 0},
+            end: {line: line1 - 1, character: 1}}}]}]
+      Cbfunc(srv, acts, '', {})
+    else
+      Cbfunc(srv, [], '', {})
+    endif
+  }
+  buf.BufLspServerSet(bufnr(), srv)
+  # Range: lines 2-4 (inclusive)
+  lsp.AutoFix(2, 4)
+  # Should apply fixes for diag4, diag3, diag2 (descending)
+  assert_equal(['fix.diag4', 'fix.diag3', 'fix.diag2'], execCmds)
+
+  ClearBufferDiagnostics()
+  buf.BufLspServerRemove(bufnr(), srv)
+  :bw!
+enddef
+
+def g:Test_LspAutoFix_Range_SkipNoPreferred()
+  silent! edit XLspAutoFixSkipNoPreferred.txt
+  set filetype=text
+  setline(1, ['a', 'b'])
+  var diags = [
+    {'range': {'start': {'line': 0, 'character': 0}, 'end': {'line': 0, 'character': 1}}, 'message': 'diag1'},
+    {'range': {'start': {'line': 1, 'character': 0}, 'end': {'line': 1, 'character': 1}}, 'message': 'diag2'},
+  ]
+  SeedBufferDiagnostics(diags)
+
+  var execCmds: list<string> = []
+  var srv = MakeCodeActionServer('srv1', [], execCmds)
+  srv.codeActionAsync = (_fname, line1, _line2, _query, Cbfunc) => {
+    if line1 == 1
+      # No preferred for diag1
+      Cbfunc(srv, [{'title': 'Not preferred', 'command': 'notpreferred'}], '', {})
+    else
+      # Preferred for diag2
+      Cbfunc(srv, [{'title': 'Preferred', 'isPreferred': true, 'command': 'preferred', 'diagnostics': [{'range': {'start': {'line': 1, 'character': 0}, 'end': {'line': 1, 'character': 1}}}]}], '', {})
+    endif
+  }
+  buf.BufLspServerSet(bufnr(), srv)
+  lsp.AutoFix(1, 2)
+  # line 2 preferred fix is applied first, then the single non-preferred fix.
+  assert_equal(['preferred', 'notpreferred'], execCmds)
+
+  ClearBufferDiagnostics()
+  buf.BufLspServerRemove(bufnr(), srv)
+  :bw!
+enddef
+
+def g:Test_LspAutoFix_Range_MultiplePreferred_ShowsMenu()
+  silent! edit XLspAutoFixRangePreferredMenu.txt
+  set filetype=text
+  setline(1, ['a'])
+  g:LspOptionsSet({usePopupInCodeAction: true})
+
+  var diags = [
+    {'range': {'start': {'line': 0, 'character': 0}, 'end': {'line': 0, 'character': 1}}, 'message': 'diag1'},
+  ]
+  SeedBufferDiagnostics(diags)
+
+  var execCmds: list<string> = []
+  var srv = MakeCodeActionServer('srv1', [], execCmds)
+  srv.codeActionAsync = (_fname, line1, _line2, _query, Cbfunc) => {
+    Cbfunc(srv, [
+      {
+        title: 'Preferred one',
+        isPreferred: true,
+        command: 'preferred.one',
+        diagnostics: [{
+          range: {
+            start: {line: line1 - 1, character: 0},
+            end: {line: line1 - 1, character: 1}}}]},
+      {
+        title: 'Preferred two',
+        isPreferred: true,
+        command: 'preferred.two',
+        diagnostics: [{
+          range: {
+            start: {line: line1 - 1, character: 0},
+            end: {line: line1 - 1, character: 1}}}]}
+    ], '', {})
+  }
+  buf.BufLspServerSet(bufnr(), srv)
+
+  lsp.AutoFix(1, 1)
+
+  var popups = popup_list()
+  assert_equal(1, popups->len())
+  var bnr = winbufnr(popups[0])
+  var lines = getbufline(bnr, 1, '$')
+  assert_equal(2, lines->len())
+  assert_match('Preferred one', lines[0])
+  assert_match('Preferred two', lines[1])
+  assert_equal([], execCmds)
+
+  popup_close(popups[0])
+  g:LspOptionsSet({usePopupInCodeAction: false})
+  ClearBufferDiagnostics()
+  buf.BufLspServerRemove(bufnr(), srv)
+  :bw!
+enddef
+
+def g:Test_LspAutoFix_Range_PopupDefersNextDiagnostic()
+  silent! edit XLspAutoFixPopupDefersNextDiag.txt
+  set filetype=text
+  setline(1, ['a', 'b'])
+  g:LspOptionsSet({usePopupInCodeAction: true})
+
+  var diags = [
+    {'range': {'start': {'line': 0, 'character': 0}, 'end': {'line': 0, 'character': 1}}, 'message': 'diag1'},
+    {'range': {'start': {'line': 1, 'character': 0}, 'end': {'line': 1, 'character': 1}}, 'message': 'diag2'},
+  ]
+  SeedBufferDiagnostics(diags)
+
+  var execCmds: list<string> = []
+  var srv = MakeCodeActionServer('srv1', [], execCmds)
+  srv.codeActionAsync = (_fname, line1, _line2, _query, Cbfunc) => {
+    if line1 == 1
+      Cbfunc(srv, [
+        {
+          title: 'Preferred one',
+          isPreferred: true,
+          command: 'preferred.one',
+          diagnostics: [{
+            range: {
+              start: {line: 0, character: 0},
+              end: {line: 0, character: 1}}}]},
+        {
+          title: 'Preferred two',
+          isPreferred: true,
+          command: 'preferred.two',
+          diagnostics: [{
+            range: {
+              start: {line: 0, character: 0},
+              end: {line: 0, character: 1}}}]}
+      ], '', {})
+    else
+      Cbfunc(srv, [{
+        title: 'Second diag preferred',
+        isPreferred: true,
+        command: 'second.diag',
+        diagnostics: [{
+          range: {
+            start: {line: 1, character: 0},
+            end: {line: 1, character: 1}}}]}], '', {})
+    endif
+  }
+  buf.BufLspServerSet(bufnr(), srv)
+
+  lsp.AutoFix(1, 2)
+  # AutoFix processes diagnostics bottom-to-top, so line 2 is applied before
+  # the line 1 popup selection is shown.
+  assert_equal(['second.diag'], execCmds)
+
+  var popups = popup_list()
+  assert_equal(1, popups->len())
+  popup_close(popups[0], 1)
+
+  assert_equal(['second.diag', 'preferred.one'], execCmds)
+
+  g:LspOptionsSet({usePopupInCodeAction: false})
+  ClearBufferDiagnostics()
+  buf.BufLspServerRemove(bufnr(), srv)
+  :bw!
+enddef
+
+def g:Test_LspAutoFix_Range_PopupCtrlCStopsNextDiagnostic()
+  silent! edit XLspAutoFixPopupCtrlCStops.txt
+  set filetype=text
+  setline(1, ['a', 'b'])
+  g:LspOptionsSet({usePopupInCodeAction: true})
+
+  var diags = [
+    {'range': {'start': {'line': 0, 'character': 0}, 'end': {'line': 0, 'character': 1}}, 'message': 'diag1'},
+    {'range': {'start': {'line': 1, 'character': 0}, 'end': {'line': 1, 'character': 1}}, 'message': 'diag2'},
+  ]
+  SeedBufferDiagnostics(diags)
+
+  var execCmds: list<string> = []
+  var srv = MakeCodeActionServer('srv1', [], execCmds)
+  srv.codeActionAsync = (_fname, line1, _line2, _query, Cbfunc) => {
+    if line1 == 1
+      Cbfunc(srv, [
+        {
+          title: 'Preferred one',
+          isPreferred: true,
+          command: 'preferred.one',
+          diagnostics: [{
+            range: {
+              start: {line: 0, character: 0},
+              end: {line: 0, character: 1}}}]},
+        {
+          title: 'Preferred two',
+          isPreferred: true,
+          command: 'preferred.two',
+          diagnostics: [{
+            range: {
+              start: {line: 0, character: 0},
+              end: {line: 0, character: 1}}}]}
+      ], '', {})
+    else
+      Cbfunc(srv, [{
+        title: 'Second diag preferred',
+        isPreferred: true,
+        command: 'second.diag',
+        diagnostics: [{
+          range: {
+            start: {line: 1, character: 0},
+            end: {line: 1, character: 1}}}]}], '', {})
+    endif
+  }
+  buf.BufLspServerSet(bufnr(), srv)
+
+  lsp.AutoFix(1, 2)
+  assert_equal(['second.diag'], execCmds)
+
+  var popups = popup_list()
+  assert_equal(1, popups->len())
+  # Simulate Ctrl-C hard cancel sentinel used by popup filter.
+  popup_close(popups[0], -9)
+
+  assert_equal(['second.diag'], execCmds)
+
+  g:LspOptionsSet({usePopupInCodeAction: false})
+  ClearBufferDiagnostics()
+  buf.BufLspServerRemove(bufnr(), srv)
+  :bw!
+enddef
+
+def g:Test_LspAutoFix_Range_PopupEscapeContinuesNextDiagnostic()
+  silent! edit XLspAutoFixPopupEscapeContinues.txt
+  set filetype=text
+  setline(1, ['a', 'b'])
+  g:LspOptionsSet({usePopupInCodeAction: true})
+
+  var diags = [
+    {'range': {'start': {'line': 0, 'character': 0}, 'end': {'line': 0, 'character': 1}}, 'message': 'diag1'},
+    {'range': {'start': {'line': 1, 'character': 0}, 'end': {'line': 1, 'character': 1}}, 'message': 'diag2'},
+  ]
+  SeedBufferDiagnostics(diags)
+
+  var execCmds: list<string> = []
+  var srv = MakeCodeActionServer('srv1', [], execCmds)
+  srv.codeActionAsync = (_fname, line1, _line2, _query, Cbfunc) => {
+    if line1 == 1
+      Cbfunc(srv, [
+        {
+          title: 'Preferred one',
+          isPreferred: true,
+          command: 'preferred.one',
+          diagnostics: [{
+            range: {
+              start: {line: 0, character: 0},
+              end: {line: 0, character: 1}}}]},
+        {
+          title: 'Preferred two',
+          isPreferred: true,
+          command: 'preferred.two',
+          diagnostics: [{
+            range: {
+              start: {line: 0, character: 0},
+              end: {line: 0, character: 1}}}]}
+      ], '', {})
+    else
+      Cbfunc(srv, [{
+        title: 'Second diag preferred',
+        isPreferred: true,
+        command: 'second.diag',
+        diagnostics: [{
+          range: {
+            start: {line: 1, character: 0},
+            end: {line: 1, character: 1}}}]}], '', {})
+    endif
+  }
+  buf.BufLspServerSet(bufnr(), srv)
+
+  lsp.AutoFix(1, 2)
+  assert_equal(['second.diag'], execCmds)
+
+  var popups = popup_list()
+  assert_equal(1, popups->len())
+  # Simulate Esc soft cancel result used by popup filter.
+  popup_close(popups[0], -1)
+
+  assert_equal(['second.diag'], execCmds)
+
+  g:LspOptionsSet({usePopupInCodeAction: false})
+  ClearBufferDiagnostics()
+  buf.BufLspServerRemove(bufnr(), srv)
+  :bw!
+enddef
+
+def g:Test_LspAutoFix_Range_ContinuesOnRpcError()
+  silent! edit XLspAutoFixContinueOnRpcError.txt
+  set filetype=text
+  setline(1, ['a', 'b', 'c'])
+  var diags = [
+    {'range': {'start': {'line': 0, 'character': 0}, 'end': {'line': 0, 'character': 1}}, 'message': 'diag1'},
+    {'range': {'start': {'line': 1, 'character': 0}, 'end': {'line': 1, 'character': 1}}, 'message': 'diag2'},
+    {'range': {'start': {'line': 2, 'character': 0}, 'end': {'line': 2, 'character': 1}}, 'message': 'diag3'},
+  ]
+  SeedBufferDiagnostics(diags)
+
+  var execCmds: list<string> = []
+  var srv = MakeCodeActionServer('srv1', [], execCmds)
+  srv.codeActionAsync = (_fname, line1, _line2, _query, Cbfunc) => {
+    if line1 == 3
+      Cbfunc(srv, [], '', {code: -32603, message: 'simulated rpc error'})
+    else
+      Cbfunc(srv, [{'title': 'Preferred', 'isPreferred': true, 'command': 'ok.' .. line1, 'diagnostics': [{'range': {'start': {'line': line1 - 1, 'character': 0}, 'end': {'line': line1 - 1, 'character': 1}}}]}], '', {})
+    endif
+  }
+  buf.BufLspServerSet(bufnr(), srv)
+  lsp.AutoFix(1, 3)
+  assert_equal(['ok.2', 'ok.1'], execCmds)
+
+  ClearBufferDiagnostics()
+  buf.BufLspServerRemove(bufnr(), srv)
+  :bw!
+enddef
+
+def g:Test_LspAutoFix_Range_MultiServer_WaitsForAllReplies()
+  silent! edit XLspAutoFixRangeMultiServer.txt
+  set filetype=text
+  setline(1, ['a', 'b'])
+  var diags = [
+    {'range': {'start': {'line': 0, 'character': 0}, 'end': {'line': 0, 'character': 1}}, 'message': 'diag1'},
+    {'range': {'start': {'line': 1, 'character': 0}, 'end': {'line': 1, 'character': 1}}, 'message': 'diag2'},
+  ]
+  SeedBufferDiagnostics(diags)
+
+  var execErr: list<string> = []
+  var execOk: list<string> = []
+  var srvErr = MakeCodeActionServer('srvErr', [], execErr)
+  var srvOk = MakeCodeActionServer('srvOk', [], execOk)
+
+  srvErr.codeActionAsync = (_fname, _line1, _line2, _query, Cbfunc) => {
+    Cbfunc(srvErr, [], '', {code: -32603, message: 'simulated rpc error'})
+  }
+  srvOk.codeActionAsync = (_fname, line1, _line2, _query, Cbfunc) => {
+    Cbfunc(srvOk, [{
+      title: 'Preferred',
+      isPreferred: true,
+      command: 'ok.' .. line1,
+      diagnostics: [{
+        range: {
+          start: {line: line1 - 1, character: 0},
+          end: {line: line1 - 1, character: 1}}}]}], '', {})
+  }
+
+  buf.BufLspServerSet(bufnr(), srvErr)
+  buf.BufLspServerSet(bufnr(), srvOk)
+
+  lsp.AutoFix(1, 2)
+
+  assert_equal([], execErr)
+  assert_equal(['ok.2', 'ok.1'], execOk)
+
+  ClearBufferDiagnostics()
+  buf.BufLspServerRemove(bufnr(), srvErr)
+  buf.BufLspServerRemove(bufnr(), srvOk)
+  :bw!
+enddef
+
+def g:Test_TextdocDidChange_IncrementalSync_MultiHunkDeleteAppliesBottomUp()
+  # Regression test for #836: ":%d" produces two diff hunks; emitting them
+  # top-down sends the second hunk's range against a document already
+  # shrunk by the first, desyncing the server.
+  if !exists('*diff')
+    # incrementalSync needs diff(); options.OptionsSet() forces it back off
+    # without it, same as the plugin itself falling back to full sync.
+    return
+  endif
+  g:LspOptionsSet({incrementalSync: true})
+  silent! edit XIncrementalMultiHunkDelete.c
+  var oldLines = ['#include <stdio.h>', '', 'int main() {',
+	'    printf("hello world\n");', '    return 0;', '}']
+  setline(1, oldLines)
+
+  var notifications: list<dict<any>> = []
+  var lspserver = MakeTestLspServer(notifications)
+  var bnr = bufnr()
+  lspserver.cachedBufferContent[bnr] = oldLines
+  lspserver.cachedBufferEol[bnr] = true
+
+  :%d
+  lspserver.textdocDidChange(bnr)
+
+  assert_equal(1, notifications->len())
+  assert_equal('textDocument/didChange', notifications[0].method)
+  var changes = notifications[0].params.contentChanges
+  assert_equal(2, changes->len())
+  assert_equal({line: 2, character: 0}, changes[0].range.start)
+  assert_equal({line: 6, character: 0}, changes[0].range.end)
+  assert_equal('', changes[0].text)
+  assert_equal({line: 0, character: 0}, changes[1].range.start)
+  assert_equal({line: 1, character: 0}, changes[1].range.end)
+  assert_equal('', changes[1].text)
+
+  g:LspOptionsSet({incrementalSync: false})
+  :%bw!
+enddef
+
+def g:Test_TextdocDidChange_IncrementalSync_MultiHunkInsertDescendingOrder()
+  if !exists('*diff')
+    return
+  endif
+  g:LspOptionsSet({incrementalSync: true})
+  silent! edit XIncrementalMultiHunkInsert.txt
+  var oldLines = ['one', 'two', 'three']
+  setline(1, oldLines)
+
+  var notifications: list<dict<any>> = []
+  var lspserver = MakeTestLspServer(notifications)
+  var bnr = bufnr()
+  lspserver.cachedBufferContent[bnr] = oldLines
+  lspserver.cachedBufferEol[bnr] = true
+
+  setline(1, ['zero', 'one', 'two', 'inserted', 'three'])
+  lspserver.textdocDidChange(bnr)
+
+  var changes = notifications[0].params.contentChanges
+  assert_equal(2, changes->len())
+  assert_equal({line: 2, character: 0}, changes[0].range.start)
+  assert_equal({line: 2, character: 0}, changes[0].range.end)
+  assert_equal("inserted\n", changes[0].text)
+  assert_equal({line: 0, character: 0}, changes[1].range.start)
+  assert_equal({line: 0, character: 0}, changes[1].range.end)
+  assert_equal("zero\n", changes[1].text)
+
+  g:LspOptionsSet({incrementalSync: false})
+  :%bw!
+enddef
+
+def g:Test_TextdocDidChange_IncrementalSync_NoEolAnchorsToLastLineEnd()
+  # Regression test: without a trailing newline, a hunk reaching the end of
+  # the document must anchor to the end of the last line, not to a
+  # {line: lineCount, character: 0} position that doesn't exist.
+  if !exists('*diff')
+    return
+  endif
+  g:LspOptionsSet({incrementalSync: true})
+  silent! edit XIncrementalNoEol.txt
+  var oldLines = ['abc', 'def', 'ghi']
+  setline(1, oldLines)
+  setlocal noeol
+
+  var notifications: list<dict<any>> = []
+  var lspserver = MakeTestLspServer(notifications)
+  var bnr = bufnr()
+  lspserver.cachedBufferContent[bnr] = oldLines
+  lspserver.cachedBufferEol[bnr] = false
+
+  :$d
+  lspserver.textdocDidChange(bnr)
+
+  var changes = notifications[0].params.contentChanges
+  assert_equal(1, changes->len())
+  assert_equal({line: 1, character: 3}, changes[0].range.start)
+  assert_equal({line: 2, character: 3}, changes[0].range.end)
+  assert_equal('', changes[0].text)
+
+  g:LspOptionsSet({incrementalSync: false})
+  :%bw!
+enddef
+
+# Only here to because the test runner needs it
+def g:StartLangServer(): bool
+  return true
+enddef
+
+# vim: tabstop=8 shiftwidth=2 softtabstop=2 noexpandtab

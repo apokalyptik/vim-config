@@ -1,0 +1,212 @@
+[
+  {
+    "name": "@vscode/l10n",
+    "version": "0.0.18",
+    "license": "MIT",
+    "path": "@vscode/l10n"
+  },
+  {
+    "name": "boolbase",
+    "version": "1.0.0",
+    "license": "ISC",
+    "path": "boolbase"
+  },
+  {
+    "name": "core-js",
+    "version": "3.51.0",
+    "license": "MIT",
+    "path": "core-js"
+  },
+  {
+    "name": "css-select",
+    "version": "5.2.2",
+    "license": "BSD-2-Clause",
+    "path": "css-select"
+  },
+  {
+    "name": "css-what",
+    "version": "6.2.2",
+    "license": "BSD-2-Clause",
+    "path": "css-what"
+  },
+  {
+    "name": "dom-serializer",
+    "version": "2.0.0",
+    "license": "MIT",
+    "path": "dom-serializer"
+  },
+  {
+    "name": "domelementtype",
+    "version": "2.3.0",
+    "license": "BSD-2-Clause",
+    "path": "domelementtype"
+  },
+  {
+    "name": "domhandler",
+    "version": "5.0.3",
+    "license": "BSD-2-Clause",
+    "path": "domhandler"
+  },
+  {
+    "name": "domutils",
+    "version": "3.2.2",
+    "license": "BSD-2-Clause",
+    "path": "domutils"
+  },
+  {
+    "name": "entities",
+    "version": "4.5.0",
+    "license": "BSD-2-Clause",
+    "path": "entities"
+  },
+  {
+    "name": "he",
+    "version": "1.2.0",
+    "license": "MIT",
+    "path": "he"
+  },
+  {
+    "name": "jsonc-parser",
+    "version": "3.3.1",
+    "license": "MIT",
+    "path": "jsonc-parser"
+  },
+  {
+    "name": "node-html-parser",
+    "version": "6.1.13",
+    "license": "MIT",
+    "path": "node-html-parser"
+  },
+  {
+    "name": "nth-check",
+    "version": "2.1.1",
+    "license": "BSD-2-Clause",
+    "path": "nth-check"
+  },
+  {
+    "name": "picomatch",
+    "version": "2.3.2",
+    "license": "MIT",
+    "path": "picomatch"
+  },
+  {
+    "name": "regenerator-runtime",
+    "version": "0.13.11",
+    "license": "MIT",
+    "path": "regenerator-runtime"
+  },
+  {
+    "name": "request-light",
+    "version": "0.7.0",
+    "license": "MIT",
+    "path": "request-light"
+  },
+  {
+    "name": "semver",
+    "version": "7.8.5",
+    "license": "ISC",
+    "path": "semver"
+  },
+  {
+    "name": "typescript",
+    "version": "6.0.3",
+    "license": "Apache-2.0",
+    "path": "typescript"
+  },
+  {
+    "name": "typescript-language-server",
+    "version": "6.0.2",
+    "license": "Apache-2.0",
+    "path": "typescript-language-server"
+  },
+  {
+    "name": "vscode-languageserver-types",
+    "version": "3.17.5",
+    "license": "MIT",
+    "path": "vscode-css-languageservice/node_modules/vscode-languageserver-types"
+  },
+  {
+    "name": "vscode-css-languageservice",
+    "version": "6.3.10",
+    "license": "MIT",
+    "path": "vscode-css-languageservice"
+  },
+  {
+    "name": "vscode-html-languageservice",
+    "version": "5.6.2",
+    "license": "MIT",
+    "path": "vscode-html-languageservice"
+  },
+  {
+    "name": "vscode-json-languageservice",
+    "version": "5.7.2",
+    "license": "MIT",
+    "path": "vscode-json-languageservice"
+  },
+  {
+    "name": "vscode-jsonrpc",
+    "version": "9.0.3",
+    "license": "MIT",
+    "path": "vscode-jsonrpc"
+  },
+  {
+    "name": "typescript",
+    "version": "4.9.5",
+    "license": "Apache-2.0",
+    "path": "vscode-langservers-extracted/node_modules/typescript"
+  },
+  {
+    "name": "vscode-langservers-extracted",
+    "version": "4.10.0",
+    "license": "MIT",
+    "path": "vscode-langservers-extracted"
+  },
+  {
+    "name": "vscode-languageserver",
+    "version": "10.1.2",
+    "license": "MIT",
+    "path": "vscode-languageserver"
+  },
+  {
+    "name": "vscode-languageserver-types",
+    "version": "3.18.4",
+    "license": "MIT",
+    "path": "vscode-languageserver-protocol/node_modules/vscode-languageserver-types"
+  },
+  {
+    "name": "vscode-languageserver-protocol",
+    "version": "3.18.4",
+    "license": "MIT",
+    "path": "vscode-languageserver-protocol"
+  },
+  {
+    "name": "vscode-languageserver-textdocument",
+    "version": "1.0.16",
+    "license": "MIT",
+    "path": "vscode-languageserver-textdocument"
+  },
+  {
+    "name": "vscode-languageserver-types",
+    "version": "3.18.5",
+    "license": "MIT",
+    "path": "vscode-languageserver-types"
+  },
+  {
+    "name": "vscode-markdown-languageservice",
+    "version": "0.5.0",
+    "license": "MIT",
+    "path": "vscode-markdown-languageservice"
+  },
+  {
+    "name": "vscode-nls",
+    "version": "5.2.0",
+    "license": "MIT",
+    "path": "vscode-nls"
+  },
+  {
+    "name": "vscode-uri",
+    "version": "3.2.0",
+    "license": "MIT",
+    "path": "vscode-uri"
+  }
+]

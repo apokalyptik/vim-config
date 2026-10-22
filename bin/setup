@@ -1,0 +1,4 @@
+#!/bin/sh
+set -eu
+config_root=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd -P)
+exec perl "$config_root/libexec/setup.pl" "$@"

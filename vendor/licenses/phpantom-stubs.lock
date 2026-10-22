@@ -1,0 +1,17 @@
+# PHPantom stubs lock file — pinned phpstorm-stubs version.
+#
+# This file is checked into version control and read by build.rs to
+# ensure reproducible builds with integrity-verified stubs.
+#
+# To update, run:  scripts/update-stubs.sh
+
+# The GitHub repository to fetch stubs from.
+# Use "JetBrains/phpstorm-stubs" for upstream, or a fork like
+# "AJenbo/phpstorm-stubs" for fixes not yet merged upstream.
+repo = "JetBrains/phpstorm-stubs"
+
+# The pinned commit SHA.
+commit = "5f68c1021badebe34119fb8fa10ba7cc25de6c0c"
+
+# SHA-256 hash of the GitHub-generated tarball for the commit above.
+sha256 = "8b9bf4b69196d9193f56a4a6ad88b9ff8a230e372312ae8a181c04df1972c4a1"

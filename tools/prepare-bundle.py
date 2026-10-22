@@ -1,0 +1,348 @@
+#!/usr/bin/env python3
+"""Maintainer-only reproducible preparation; normal installation is fully offline.
+
+--verify checks committed archives without downloading. --rebuild deliberately
+uses the network and compiler on a preparation machine, never on target hosts.
+"""
+import argparse
+import concurrent.futures
+import gzip
+import hashlib
+import io
+import json
+import os
+from pathlib import Path
+import re
+import shutil
+import subprocess
+import tarfile
+import tempfile
+
+ROOT = Path(__file__).resolve().parents[1]
+MANIFEST = ROOT / 'tools/vendor-manifest.json'
+
+
+def sha256(path):
+    h = hashlib.sha256()
+    with path.open('rb') as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b''):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def download(url, target, expected=None):
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if not target.exists() or (expected and sha256(target) != expected):
+        temporary = target.with_suffix(target.suffix + '.partial')
+        subprocess.run(['curl', '-fsSL', '--retry', '2', url, '-o', str(temporary)], check=True)
+        if expected and sha256(temporary) != expected:
+            temporary.unlink()
+            raise RuntimeError('Checksum mismatch: ' + url)
+        temporary.replace(target)
+    return target
+
+
+def extract(archive, destination, strip=0):
+    destination.mkdir(parents=True, exist_ok=True)
+    with tarfile.open(archive, 'r:*') as bundle:
+        for member in bundle:
+            parts = Path(member.name).parts[strip:]
+            if not parts:
+                continue
+            if member.name.startswith('/') or '..' in parts:
+                raise RuntimeError('Unsafe archive path: ' + member.name)
+            member.name = str(Path(*parts))
+            if member.issym() or member.islnk():
+                raise RuntimeError('Unexpected source archive link: ' + member.name)
+            if member.isdir() or member.isfile():
+                bundle.extract(member, destination)
+
+
+def archive(directory, target):
+    with target.open('wb') as raw:
+        with gzip.GzipFile(filename='', mode='wb', fileobj=raw, mtime=0, compresslevel=9) as compressed:
+            with tarfile.open(fileobj=compressed, mode='w') as bundle:
+                for path in sorted(directory.rglob('*')):
+                    if path.is_dir():
+                        continue
+                    info = bundle.gettarinfo(str(path), arcname=path.relative_to(directory).as_posix())
+                    info.uid = info.gid = 0
+                    info.uname = info.gname = ''
+                    info.mtime = 0
+                    if path.is_symlink():
+                        bundle.addfile(info)
+                    else:
+                        with path.open('rb') as stream:
+                            bundle.addfile(info, stream)
+
+
+def deb_data(archive_path):
+    """Read Debian's ar container without requiring dpkg or ar on the builder."""
+    with archive_path.open('rb') as stream:
+        if stream.read(8) != b'!<arch>\n':
+            raise RuntimeError('Not a Debian ar archive: ' + str(archive_path))
+        while True:
+            header = stream.read(60)
+            if not header:
+                break
+            if len(header) != 60 or header[58:] != b'`\n':
+                raise RuntimeError('Invalid Debian ar member')
+            name = header[:16].decode('ascii').strip().rstrip('/')
+            size = int(header[48:58])
+            data = stream.read(size)
+            if size % 2:
+                stream.read(1)
+            if name.startswith('data.tar'):
+                return data
+    raise RuntimeError('Missing Debian data archive: ' + str(archive_path))
+
+
+def prepare_linux_node_runtime(node, work, manifest):
+    runtime = manifest['linux_node_runtime']
+    (node / 'bin/node').replace(node / 'bin/node.real')
+    for item in runtime['packages']:
+        source = download(item['url'], work / 'downloads' / item['url'].rsplit('/', 1)[1], item['sha256'])
+        with tarfile.open(fileobj=io.BytesIO(deb_data(source)), mode='r:*') as package:
+            for member in item['members']:
+                info = package.getmember(member['source'])
+                if not info.isfile():
+                    raise RuntimeError('Expected regular runtime member: ' + member['source'])
+                output = node / member['destination']
+                output.parent.mkdir(parents=True, exist_ok=True)
+                output.write_bytes(package.extractfile(info).read())
+                output.chmod(info.mode)
+    for item in runtime['license_sources']:
+        download(item['url'], node / 'licenses/gcc-runtime' / item['name'], item['sha256'])
+    (node / 'bin/node').write_text('''#!/bin/sh
+# Select only this process's checked-in C++ runtime; no host installation needed.
+set -eu
+node_runtime=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd -P)
+LD_LIBRARY_PATH="$node_runtime/lib/node${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+export LD_LIBRARY_PATH
+exec "$node_runtime/bin/node.real" "$@"
+''')
+    (node / 'bin/node').chmod(0o755)
+    notices = ROOT / 'vendor/licenses/gcc-runtime'
+    notices.mkdir(parents=True, exist_ok=True)
+    for source in (node / 'licenses/gcc-runtime').iterdir():
+        shutil.copyfile(source, notices / source.name)
+
+
+def notices_from_tar(source, destination):
+    """Keep notices at every depth, including ring's third-party notices."""
+    found = []
+    with tarfile.open(source, 'r:*') as bundle:
+        for member in bundle:
+            relative = Path(*Path(member.name).parts[1:])
+            if not member.isfile() or not relative.parts or '..' in relative.parts:
+                continue
+            name = relative.name.lower()
+            if any(any(token in p.lower() for token in ('license', 'licence', 'notice', 'copying', 'copyright', 'authors')) for p in relative.parts) or name in ('cargo.toml',):
+                output = destination / relative
+                output.parent.mkdir(parents=True, exist_ok=True)
+                output.write_bytes(bundle.extractfile(member).read())
+                found.append(str(relative))
+    return found
+
+
+def collect_licenses(work):
+    licenses = ROOT / 'vendor/licenses'
+    licenses.mkdir(parents=True, exist_ok=True)
+    download('https://raw.githubusercontent.com/PHPantom-dev/phpantom_lsp/0.11.1/LICENSE', licenses / 'phpantom-MIT.txt')
+    lock = download('https://raw.githubusercontent.com/PHPantom-dev/phpantom_lsp/0.11.1/Cargo.lock', licenses / 'phpantom-Cargo.lock')
+    download('https://raw.githubusercontent.com/PHPantom-dev/phpantom_lsp/0.11.1/stubs.lock', licenses / 'phpantom-stubs.lock')
+    download('https://raw.githubusercontent.com/JetBrains/phpstorm-stubs/5f68c1021badebe34119fb8fa10ba7cc25de6c0c/LICENSE', licenses / 'phpstorm-stubs-Apache-2.0.txt')
+    download('https://raw.githubusercontent.com/vim/vim/v9.1.1244/runtime/doc/uganda.txt', licenses / 'vim-license.txt')
+    crates = []
+    for block in lock.read_text().split('[[package]]')[1:]:
+        if 'source = "registry+' not in block:
+            continue
+        get = lambda key: re.search(r'^' + key + r' = "([^"]+)"', block, re.M).group(1)
+        crates.append(dict(name=get('name'), version=get('version'), sha256=get('checksum')))
+    def crate_notices(item):
+        name, version = item['name'], item['version']
+        url = f'https://static.crates.io/crates/{name}/{name}-{version}.crate'
+        source = download(url, work / 'crate-downloads' / f'{name}-{version}.crate', item['sha256'])
+        item['source'] = url
+        item['notice_files'] = notices_from_tar(source, licenses / 'phpantom-dependencies' / f'{name}-{version}')
+        return item
+    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+        crates = list(pool.map(crate_notices, crates))
+    (licenses / 'phpantom-dependencies.json').write_text(json.dumps(crates, indent=2) + '\n')
+    # Some workspace crates omit their inherited licence files from the crate
+    # archive. Recover the notices from the exact VCS revision embedded by Cargo.
+    upstream = []
+    trees = {}
+    for item in crates:
+        if any('license' in name.lower() or 'copying' in name.lower() or 'notice' in name.lower() for name in item['notice_files']) or any('permission is hereby granted' in (licenses / 'phpantom-dependencies' / (item['name'] + '-' + item['version']) / name).read_text(errors='replace').lower() for name in item['notice_files']):
+            continue
+        name = item['name'] + '-' + item['version']
+        cargo = (licenses / 'phpantom-dependencies' / name / 'Cargo.toml').read_text()
+        repository = re.search(r'^repository\s*=\s*"([^"]+)"', cargo, re.M).group(1).removesuffix('.git')
+        with tarfile.open(work / 'crate-downloads' / (name + '.crate')) as source:
+            vcs = json.load(source.extractfile(name + '/.cargo_vcs_info.json'))
+        revision = vcs['git']['sha1']
+        repo = repository.removeprefix('https://github.com/')
+        if (repo, revision) not in trees:
+            tree = download('https://api.github.com/repos/' + repo + '/git/trees/' + revision + '?recursive=1', work / 'notice-trees' / (repo.replace('/', '-') + '-' + revision + '.json'))
+            trees[(repo, revision)] = json.loads(tree.read_text())['tree']
+        files = []
+        for entry in trees[(repo, revision)]:
+            parts = Path(entry['path']).parts
+            if entry['type'] != 'blob' or not any(any(token in p.lower() for token in ('license', 'licence', 'notice', 'copying', 'copyright')) for p in parts):
+                continue
+            target = licenses / 'phpantom-upstream' / (repo.replace('/', '-') + '-' + revision) / entry['path']
+            download('https://raw.githubusercontent.com/' + repo + '/' + revision + '/' + entry['path'], target)
+            files.append(str(target.relative_to(licenses)))
+        if not files:
+            raise RuntimeError('No inherited licence notices found for ' + name)
+        upstream.append(dict(crate=name, repository=repository, revision=revision, notice_files=files))
+    (licenses / 'phpantom-upstream-sources.json').write_text(json.dumps(upstream, indent=2) + '\n')
+    for source in sorted((work / 'gomodcache').glob('**/go.mod')):
+        directory = source.parent
+        if not any('@' in p for p in directory.parts):
+            continue
+        relative = directory.relative_to(work / 'gomodcache')
+        for path in directory.rglob('*'):
+            if path.is_file() and any(token in path.name.lower() for token in ('license', 'licence', 'notice', 'copying', 'copyright', 'patents')):
+                destination = licenses / 'gopls-dependencies' / relative / path.relative_to(directory)
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(path, destination)
+    for name in ('LICENSE', 'PATENTS'):
+        source = work / 'go-host/go' / name
+        if source.exists():
+            shutil.copyfile(source, licenses / ('go-' + name + '.txt'))
+    node_license = work / 'node-darwin-arm64/licenses/node/LICENSE'
+    if node_license.exists():
+        shutil.copyfile(node_license, licenses / 'node-LICENSE.txt')
+    js = work / 'js/node_modules'
+    packages = []
+    for package in sorted(js.glob('**/package.json')):
+        directory = package.parent
+        if directory.parent.name != 'node_modules' and directory.parent.parent.name != 'node_modules':
+            continue
+        data = json.loads(package.read_text())
+        packages.append(dict(name=data.get('name'), version=data.get('version'), license=data.get('license'), path=str(directory.relative_to(js))))
+        for path in directory.rglob('*'):
+            if path.is_file() and any(token in path.name.lower() for token in ('license', 'licence', 'notice', 'copying', 'copyright')):
+                output = licenses / 'javascript-dependencies' / path.relative_to(js)
+                output.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(path, output)
+    (licenses / 'javascript-dependencies.json').write_text(json.dumps(packages, indent=2) + '\n')
+    print(f'Preserved notices for {len(crates)} locked Rust crates and {len(packages)} JavaScript packages')
+
+
+def rebuild(work, manifest):
+    work.mkdir(parents=True, exist_ok=True)
+    downloads = work / 'downloads'
+    sources = {}
+    for item in manifest['sources']:
+        filename = item['url'].rsplit('/', 1)[1]
+        source = download(item['url'], downloads / filename, item['sha256'])
+        sources[(item['name'], item['platform'])] = source
+        if item['name'] in ('go', 'phpantom'):
+            payload = next(p for p in manifest['payloads'] if p['platform'] == item['platform'] and p['id'].startswith('go1.' if item['name'] == 'go' else 'phpantom'))
+            shutil.copyfile(source, ROOT / payload['parts'][0])
+    for item in manifest['plugins']:
+        source = download(item['archive_source'], downloads / (item['name'] + '.tar.gz'), item['archive_sha256'])
+        destination = ROOT / item['path']
+        if destination.exists():
+            shutil.rmtree(destination)
+        extract(source, destination, strip=1)
+    patcher = ROOT / 'tools/patch-lsp.py'
+    if patcher.exists():
+        subprocess.run([os.sys.executable, str(patcher)], cwd=ROOT, check=True)
+    for platform, suffix in [('linux-x86_64', 'linux-x64'), ('darwin-arm64', 'darwin-arm64')]:
+        node = work / ('node-' + platform)
+        node.mkdir(exist_ok=True)
+        with tarfile.open(sources[('node', platform)]) as bundle:
+            prefix = 'node-v' + manifest['versions']['node'] + '-' + suffix + '/'
+            for member_name, target in [('bin/node', 'bin/node'), ('LICENSE', 'licenses/node/LICENSE')]:
+                member = bundle.getmember(prefix + member_name)
+                output = node / target
+                output.parent.mkdir(parents=True, exist_ok=True)
+                output.write_bytes(bundle.extractfile(member).read())
+                output.chmod(member.mode)
+        if platform == 'linux-x86_64':
+            prepare_linux_node_runtime(node, work, manifest)
+        archive(node, ROOT / 'payloads' / ('node-v' + manifest['versions']['node'] + '-' + platform + '.tar.gz'))
+    js = work / 'js'
+    js.mkdir(exist_ok=True)
+    for name in ('package.json', 'package-lock.json'):
+        shutil.copyfile(ROOT / 'vendor/js' / name, js / name)
+    env = os.environ.copy()
+    env['NPM_CONFIG_CACHE'] = str(work / 'npm-cache')
+    subprocess.run(['npm', 'ci', '--prefix', str(js), '--ignore-scripts', '--omit=dev', '--no-audit', '--no-fund'], env=env, check=True)
+    shutil.rmtree(js / 'node_modules/.bin', ignore_errors=True)
+    archive(js, ROOT / 'payloads/javascript-language-servers.tar.gz')
+    host = 'darwin-arm64' if os.uname().sysname == 'Darwin' and os.uname().machine == 'arm64' else 'linux-x86_64'
+    host_go = work / 'go-host'
+    extract(sources[('go', host)], host_go)
+    go = str(host_go / 'go/bin/go')
+    env.update(GOPATH=str(work / 'gopath'), GOMODCACHE=str(work / 'gomodcache'), GOCACHE=str(work / 'go-cache'), XDG_CONFIG_HOME=str(work / 'config'), GOTELEMETRY='off', GOENV='off', GOTOOLCHAIN='local', CGO_ENABLED='0', GOBIN='')
+    module = manifest['gopls_build']['module'] + '@' + manifest['gopls_build']['version']
+    info = json.loads(subprocess.check_output([go, 'mod', 'download', '-json', module], env=env))
+    if info['Sum'] != manifest['gopls_build']['module_sum']:
+        raise RuntimeError('gopls module checksum changed')
+    for osname, arch, platform in [('darwin', 'arm64', 'darwin-arm64'), ('linux', 'amd64', 'linux-x86_64')]:
+        output = work / platform / 'bin/gopls'
+        output.parent.mkdir(parents=True, exist_ok=True)
+        env.update(GOOS=osname, GOARCH=arch)
+        subprocess.run([go, 'install', '-trimpath', '-ldflags=-s -w', module], env=env, check=True)
+        install = work / 'gopath/bin'
+        if platform != host:
+            install = install / (osname + '_' + arch)
+        shutil.copyfile(install / 'gopls', output)
+        output.chmod(0o755)
+        archive(work / platform, ROOT / 'payloads' / ('gopls-' + manifest['gopls_build']['version'] + '-' + platform + '.tar.gz'))
+    collect_licenses(work)
+    for payload in manifest['payloads']:
+        payload['sha256'] = sha256(ROOT / payload['parts'][0])
+        payload['size_bytes'] = (ROOT / payload['parts'][0]).stat().st_size
+    MANIFEST.write_text(json.dumps(manifest, indent=2) + '\n')
+    print('Rebuilt offline payloads; review the manifest and archive changes before publication.')
+
+
+def verify(manifest):
+    total = 0
+    for payload in manifest['payloads']:
+        digest = hashlib.sha256()
+        size = 0
+        for name in payload['parts']:
+            path = ROOT / name
+            if path.stat().st_size >= 90 * 1024 * 1024:
+                raise RuntimeError('Archive part exceeds repository limit: ' + name)
+            with path.open('rb') as stream:
+                for chunk in iter(lambda: stream.read(1024 * 1024), b''):
+                    digest.update(chunk)
+                    size += len(chunk)
+        if digest.hexdigest() != payload['sha256'] or size != payload['size_bytes']:
+            raise RuntimeError('Payload checksum or size mismatch: ' + payload['id'])
+        total += size
+    for item in manifest['plugins']:
+        if not (ROOT / item['path']).is_dir():
+            raise RuntimeError('Missing plugin: ' + item['path'])
+    print(f'OK: {len(manifest["payloads"])} payloads, {total:,} compressed bytes, {len(manifest["plugins"])} pinned plugins')
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    actions = parser.add_mutually_exclusive_group(required=True)
+    actions.add_argument('--verify', action='store_true')
+    actions.add_argument('--rebuild', action='store_true')
+    actions.add_argument('--collect-licenses', action='store_true', help=argparse.SUPPRESS)
+    parser.add_argument('--work-dir', type=Path)
+    args = parser.parse_args()
+    manifest = json.loads(MANIFEST.read_text())
+    if args.verify:
+        verify(manifest)
+    else:
+        work = args.work_dir or Path(tempfile.mkdtemp(prefix='vim-config-bundle-'))
+        if args.collect_licenses:
+            collect_licenses(work)
+        else:
+            rebuild(work, manifest)
+
+
+if __name__ == '__main__':
+    main()

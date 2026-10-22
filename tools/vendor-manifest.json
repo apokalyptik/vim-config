@@ -1,0 +1,293 @@
+{
+  "schema_version": 1,
+  "prepared_date": "2026-10-22",
+  "payloads": [
+    {
+      "id": "go1.27.3.darwin-arm64",
+      "platform": "darwin-arm64",
+      "parts": [
+        "payloads/go1.27.3.darwin-arm64.tar.gz"
+      ],
+      "sha256": "dd3908cf20959d798c1e06ebe5b72213f0505ce01373b40ce3110975a6cd99c2",
+      "size_bytes": 68196737,
+      "destination": "darwin-arm64",
+      "strip_components": 0
+    },
+    {
+      "id": "go1.27.3.linux-amd64",
+      "platform": "linux-x86_64",
+      "parts": [
+        "payloads/go1.27.3.linux-amd64.tar.gz"
+      ],
+      "sha256": "65efbc80fdc1fa2cd2631cad5b481777a68e8725f34e89f50fc6ac714e379b40",
+      "size_bytes": 70588678,
+      "destination": "linux-x86_64",
+      "strip_components": 0
+    },
+    {
+      "id": "gopls-v0.24.0-darwin-arm64",
+      "platform": "darwin-arm64",
+      "parts": [
+        "payloads/gopls-v0.24.0-darwin-arm64.tar.gz"
+      ],
+      "sha256": "31e07de904273f050cbeecd5eb992845fcb0e6b1ffd484351c193842ee1e047c",
+      "size_bytes": 11029688,
+      "destination": "darwin-arm64",
+      "strip_components": 0
+    },
+    {
+      "id": "gopls-v0.24.0-linux-x86_64",
+      "platform": "linux-x86_64",
+      "parts": [
+        "payloads/gopls-v0.24.0-linux-x86_64.tar.gz"
+      ],
+      "sha256": "1f2c318e6d0770cbfe35050eb10b164650439c75188b78e4b645fe26d143665b",
+      "size_bytes": 11730515,
+      "destination": "linux-x86_64",
+      "strip_components": 0
+    },
+    {
+      "id": "javascript-language-servers",
+      "platform": "all",
+      "parts": [
+        "payloads/javascript-language-servers.tar.gz"
+      ],
+      "sha256": "a3f23f82658f1846fbe9d435fccdff1dd3e465351fa217566f2e92d90fb5aae1",
+      "size_bytes": 18901355,
+      "destination": "shared",
+      "strip_components": 0
+    },
+    {
+      "id": "node-v24.22.1-darwin-arm64",
+      "platform": "darwin-arm64",
+      "parts": [
+        "payloads/node-v24.22.1-darwin-arm64.tar.gz"
+      ],
+      "sha256": "97b360e4f2a022be05f87fe62a8f5f0fcbe1d2b29b2554f7ccb0a0be69b745af",
+      "size_bytes": 39312979,
+      "destination": "darwin-arm64",
+      "strip_components": 0
+    },
+    {
+      "id": "node-v24.22.1-linux-x86_64",
+      "platform": "linux-x86_64",
+      "parts": [
+        "payloads/node-v24.22.1-linux-x86_64.tar.gz"
+      ],
+      "sha256": "bda0dc31f27fb5fb25b53387982b8ddd25d8accfe045d46b6d1aa3a28d8f9525",
+      "size_bytes": 45348754,
+      "destination": "linux-x86_64",
+      "strip_components": 0
+    },
+    {
+      "id": "phpantom-0.11.1-darwin-arm64",
+      "platform": "darwin-arm64",
+      "parts": [
+        "payloads/phpantom-0.11.1-darwin-arm64.tar.gz"
+      ],
+      "sha256": "ba32a40677fe2fa87f44f3f7ce6dda678a55a770d06d77f2fe128dcc742e17c6",
+      "size_bytes": 14837229,
+      "destination": "darwin-arm64/bin",
+      "strip_components": 0
+    },
+    {
+      "id": "phpantom-0.11.1-linux-x86_64",
+      "platform": "linux-x86_64",
+      "parts": [
+        "payloads/phpantom-0.11.1-linux-x86_64.tar.gz"
+      ],
+      "sha256": "906dd8104d4bf82aa1c4225fba297a90ff1cff0552df635ee858fc272f445fc6",
+      "size_bytes": 17410185,
+      "destination": "linux-x86_64/bin",
+      "strip_components": 0
+    }
+  ],
+  "plugins": [
+    {
+      "name": "lsp",
+      "repository": "https://github.com/yegappan/lsp",
+      "revision": "c741b2f1afb42b9f267824dac4049674908f4a41",
+      "path": "vendor/pack/vim-config/start/lsp",
+      "archive_source": "https://api.github.com/repos/yegappan/lsp/tarball/c741b2f1afb42b9f267824dac4049674908f4a41",
+      "archive_sha256": "753a61dc7df8e8e4987915a8f4d7fb6e1a81d4428ab60f086b9015a2d856eb23"
+    },
+    {
+      "name": "fugitive",
+      "repository": "https://github.com/tpope/vim-fugitive",
+      "revision": "3b753cf8c6a4dcde6edee8827d464ba9b8c4a6f0",
+      "path": "vendor/pack/vim-config/opt/fugitive",
+      "archive_source": "https://api.github.com/repos/tpope/vim-fugitive/tarball/3b753cf8c6a4dcde6edee8827d464ba9b8c4a6f0",
+      "archive_sha256": "9d286fc84056cca1c09c6a8fe0a3df54020778f9a9d358a5c213945eb5d0b196"
+    },
+    {
+      "name": "signify",
+      "repository": "https://github.com/mhinz/vim-signify",
+      "revision": "e7557022f94270e887cbb391a746c1818e570d7f",
+      "path": "vendor/pack/vim-config/opt/signify",
+      "archive_source": "https://api.github.com/repos/mhinz/vim-signify/tarball/e7557022f94270e887cbb391a746c1818e570d7f",
+      "archive_sha256": "e38b618dee030c515368c42851b6abf016fd5dcc78778739d2b2dbffdaa2ff0c"
+    },
+    {
+      "name": "rainbow_csv",
+      "repository": "https://github.com/mechatroner/rainbow_csv",
+      "revision": "3dbbfd7d17536aebfb80f571255548495574c32b",
+      "path": "vendor/pack/vim-config/start/rainbow_csv",
+      "archive_source": "https://api.github.com/repos/mechatroner/rainbow_csv/tarball/3dbbfd7d17536aebfb80f571255548495574c32b",
+      "archive_sha256": "d86188b69c99f62f7e712f399129bc1c10d683548945de8b76e4608afec68d6d"
+    },
+    {
+      "name": "servers-dot-dat",
+      "repository": "https://github.com/apokalyptik/vim-servers-dot-dat",
+      "revision": "23dfc234f358353d1ae4b8866ac26bfa8cdaea04",
+      "path": "vendor/pack/vim-config/start/servers-dot-dat",
+      "archive_source": "https://api.github.com/repos/apokalyptik/vim-servers-dot-dat/tarball/23dfc234f358353d1ae4b8866ac26bfa8cdaea04",
+      "archive_sha256": "e5c77a0e6294f1946e9fe1dda184f956524ebbd66b734726abdceb382415f5c4"
+    }
+  ],
+  "sources": [
+    {
+      "name": "node",
+      "version": "v24.22.1",
+      "platform": "linux-x86_64",
+      "url": "https://nodejs.org/dist/v24.22.1/node-v24.22.1-linux-x64.tar.gz",
+      "sha256": "eb6728e77c576a35162c122c45ccadf224d89ff00abc8dae46cc2897c6002d7c",
+      "repacked": "Official executable retained as bin/node.real with bin/node launcher, complete Node LICENSE, private libstdc++/libgcc and their licence texts; npm omitted."
+    },
+    {
+      "name": "node",
+      "version": "v24.22.1",
+      "platform": "darwin-arm64",
+      "url": "https://nodejs.org/dist/v24.22.1/node-v24.22.1-darwin-arm64.tar.gz",
+      "sha256": "89c682593d76cd44233fa53b1563264e7de9cbb189cad169135c5b4fadfbc0a7",
+      "repacked": "Only bin/node and complete LICENSE retained; npm is not a runtime dependency"
+    },
+    {
+      "name": "go",
+      "version": "1.27.3",
+      "platform": "darwin-arm64",
+      "url": "https://go.dev/dl/go1.27.3.darwin-arm64.tar.gz",
+      "sha256": "dd3908cf20959d798c1e06ebe5b72213f0505ce01373b40ce3110975a6cd99c2"
+    },
+    {
+      "name": "go",
+      "version": "1.27.3",
+      "platform": "linux-x86_64",
+      "url": "https://go.dev/dl/go1.27.3.linux-amd64.tar.gz",
+      "sha256": "65efbc80fdc1fa2cd2631cad5b481777a68e8725f34e89f50fc6ac714e379b40"
+    },
+    {
+      "name": "phpantom",
+      "version": "0.11.1",
+      "platform": "darwin-arm64",
+      "url": "https://github.com/PHPantom-dev/phpantom_lsp/releases/download/0.11.1/phpantom_lsp-aarch64-apple-darwin.tar.gz",
+      "sha256": "ba32a40677fe2fa87f44f3f7ce6dda678a55a770d06d77f2fe128dcc742e17c6"
+    },
+    {
+      "name": "phpantom",
+      "version": "0.11.1",
+      "platform": "linux-x86_64",
+      "url": "https://github.com/PHPantom-dev/phpantom_lsp/releases/download/0.11.1/phpantom_lsp-x86_64-unknown-linux-gnu.tar.gz",
+      "sha256": "906dd8104d4bf82aa1c4225fba297a90ff1cff0552df635ee858fc272f445fc6"
+    }
+  ],
+  "versions": {
+    "phpantom": "0.11.1",
+    "node": "24.22.1",
+    "go": "1.27.3",
+    "gopls": "0.24.0",
+    "typescript": "6.0.3",
+    "typescript_language_server": "6.0.2",
+    "vscode_langservers_extracted": "4.10.0"
+  },
+  "gopls_build": {
+    "module": "golang.org/x/tools/gopls",
+    "version": "v0.24.0",
+    "revision": "1f9922d1dcc5836d5c5bcb552c8fed230f885372",
+    "module_sum": "h1:nPO/LffYa4sP62Ueuema5PPnZPGaZjGl+vZGvbTek4g=",
+    "CGO_ENABLED": "0",
+    "flags": [
+      "-trimpath",
+      "-ldflags=-s -w"
+    ],
+    "command": "go install -trimpath -ldflags=\"-s -w\" golang.org/x/tools/gopls@v0.24.0"
+  },
+  "tools": {
+    "phpantom": "{platform}/bin/phpantom_lsp",
+    "node": "{platform}/bin/node",
+    "gopls": "{platform}/bin/gopls",
+    "go": "{platform}/go/bin/go",
+    "gofmt": "{platform}/go/bin/gofmt",
+    "typescript": "shared/node_modules/typescript-language-server/lib/cli.mjs",
+    "tsserver": "shared/node_modules/typescript/lib/tsserver.js",
+    "html": "shared/node_modules/vscode-langservers-extracted/bin/vscode-html-language-server",
+    "css": "shared/node_modules/vscode-langservers-extracted/bin/vscode-css-language-server",
+    "json": "shared/node_modules/vscode-langservers-extracted/bin/vscode-json-language-server"
+  },
+  "downstream_patches": [
+    {
+      "path": "tools/patch-lsp.py",
+      "description": "Gate LSP root discovery by project safety policy and expose per-buffer guarded attach/detach functions."
+    }
+  ],
+  "notice_indexes": [
+    "vendor/licenses/phpantom-dependencies.json",
+    "vendor/licenses/phpantom-upstream-sources.json",
+    "vendor/licenses/javascript-dependencies.json"
+  ],
+  "javascript_lockfile": "vendor/js/package-lock.json",
+  "javascript_lockfile_sha256": "e5dcddc41cff5918051e080ba18c0643f046bc7d728d9106a2f6ea417ce294fc",
+  "linux_node_runtime": {
+    "packages": [
+      {
+        "name": "libstdc++6",
+        "version": "12.2.0-14+deb12u1",
+        "url": "https://deb.debian.org/debian/pool/main/g/gcc-12/libstdc++6_12.2.0-14+deb12u1_amd64.deb",
+        "sha256": "5cd3171216d4ab0fc911cfe9c35509bf2dd8f47761c43b7f6a4296701551a24d",
+        "members": [
+          {
+            "source": "./usr/lib/x86_64-linux-gnu/libstdc++.so.6.0.30",
+            "destination": "lib/node/libstdc++.so.6"
+          }
+        ]
+      },
+      {
+        "name": "libgcc-s1",
+        "version": "12.2.0-14+deb12u1",
+        "url": "https://deb.debian.org/debian/pool/main/g/gcc-12/libgcc-s1_12.2.0-14+deb12u1_amd64.deb",
+        "sha256": "3016e62cb4b7cd8038822870601f5ed131befe942774d0f745622cc77d8a88f7",
+        "members": [
+          {
+            "source": "./lib/x86_64-linux-gnu/libgcc_s.so.1",
+            "destination": "lib/node/libgcc_s.so.1"
+          }
+        ]
+      },
+      {
+        "name": "gcc-12-base",
+        "version": "12.2.0-14+deb12u1",
+        "url": "https://deb.debian.org/debian/pool/main/g/gcc-12/gcc-12-base_12.2.0-14+deb12u1_amd64.deb",
+        "sha256": "1896a2aacf4ad681ff5eacc24a5b0ca4d5d9c9b9c9e4b6de5197bc1e116ea619",
+        "members": [
+          {
+            "source": "./usr/share/doc/gcc-12-base/copyright",
+            "destination": "licenses/gcc-runtime/Debian-copyright"
+          }
+        ]
+      }
+    ],
+    "license_sources": [
+      {
+        "name": "COPYING.RUNTIME",
+        "url": "https://raw.githubusercontent.com/gcc-mirror/gcc/releases/gcc-12.2.0/COPYING.RUNTIME",
+        "sha256": "9d6b43ce4d8de0c878bf16b54d8e7a10d9bd42b75178153e3af6a815bdc90f74"
+      },
+      {
+        "name": "COPYING3",
+        "url": "https://raw.githubusercontent.com/gcc-mirror/gcc/releases/gcc-12.2.0/COPYING3",
+        "sha256": "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903"
+      }
+    ],
+    "os_requirements": "Linux x86-64 with the normal glibc loader and glibc >=2.36 (Debian12 baseline).",
+    "wrapper": "bin/node is a shell launcher selecting the private lib/node GCC runtime for bin/node.real."
+  }
+}

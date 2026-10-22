@@ -1,0 +1,2 @@
+payloads/** -text -diff
+vendor/** linguist-vendored

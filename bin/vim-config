@@ -1,0 +1,9 @@
+#!/bin/sh
+set -eu
+config_root=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd -P)
+if [ "${1-}" = --profile ]; then
+    [ "$#" -ge 2 ] || { printf '%s\n' 'Missing profile name.' >&2; exit 64; }
+    export VIM_CONFIG_PROFILE="$2"
+    shift 2
+fi
+exec vim -u "$config_root/vimrc" "$@"

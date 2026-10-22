@@ -1,0 +1,71 @@
+#!/bin/sh
+# No project scans. --lsp uses disposable projects and caches below a temp dir.
+set -eu
+doctor_root=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd -P)
+doctor_profile=${VIM_CONFIG_PROFILE:-}
+if [ -z "$doctor_profile" ] && [ -f "$doctor_root/.state/profile" ]; then
+    IFS= read -r doctor_profile < "$doctor_root/.state/profile" || :
+fi
+if [ -z "$doctor_profile" ]; then
+    case "$(uname -s)" in Darwin) doctor_profile=laptop ;; *) doctor_profile=container ;; esac
+fi
+doctor_mode=quick
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --profile) [ "$#" -ge 2 ] || exit 64; doctor_profile=$2; shift 2 ;;
+        --quick) doctor_mode=quick; shift ;;
+        --lsp) doctor_mode=lsp; shift ;;
+        *) printf '%s\n' 'Usage: vim-config-doctor [--profile container|sandbox|misc|laptop|wsl] [--quick|--lsp]' >&2; exit 64 ;;
+    esac
+done
+case "$doctor_profile" in container|sandbox|misc|laptop|wsl) ;; *) printf '%s\n' 'Unknown profile.' >&2; exit 64 ;; esac
+case "$(uname -s):$(uname -m)" in
+    Linux:x86_64|Linux:amd64) doctor_platform=linux-x86_64 ;;
+    Darwin:arm64) doctor_platform=darwin-arm64 ;;
+    *) printf '%s\n' 'Unsupported tool platform (expected Linux x86-64 or macOS ARM64).' >&2; exit 69 ;;
+esac
+printf 'Vim configuration doctor: profile=%s platform=%s mode=%s\n' "$doctor_profile" "$doctor_platform" "$doctor_mode"
+printf 'Kernel: %s\n' "$(uname -sr)"
+doctor_failed=0
+if command -v vim >/dev/null 2>&1; then
+    doctor_vim_version=$(vim --version)
+    printf '%s\n' "$doctor_vim_version" | sed -n '1,3p'
+    for doctor_feature in job channel popupwin textprop timers vim9script; do
+        case "$doctor_vim_version" in
+            *"+$doctor_feature"*) printf 'Vim +%s: yes\n' "$doctor_feature" ;;
+            *) printf 'Vim +%s: MISSING\n' "$doctor_feature"; doctor_failed=1 ;;
+        esac
+    done
+else
+    printf '%s\n' 'Vim: MISSING'; exit 69
+fi
+for doctor_tool in git svn diff tar php perl node go python3 curl wget unshare mount setpriv; do
+    printf '%s: ' "$doctor_tool"
+    command -v "$doctor_tool" || printf '%s\n' 'not on host PATH (bundled runtimes checked separately)'
+done
+if command -v getconf >/dev/null 2>&1; then
+    getconf GNU_LIBC_VERSION 2>/dev/null || :
+fi
+
+doctor_tmp=$(mktemp -d "${TMPDIR:-/tmp}/vim-config-doctor.XXXXXXXX")
+doctor_tmp=$(CDPATH='' cd -- "$doctor_tmp" && pwd -P)
+trap 'rm -rf "$doctor_tmp"' EXIT HUP INT TERM
+export VIM_DOCTOR_ROOT="$doctor_root"
+export VIM_DOCTOR_PROFILE="$doctor_profile"
+export VIM_DOCTOR_PLATFORM="$doctor_platform"
+export VIM_DOCTOR_MODE="$doctor_mode"
+export VIM_DOCTOR_TEMP="$doctor_tmp"
+# Vim itself gets no viminfo, swap, user config, or user plugins. Its fixture jobs
+# are launched only through helper-run. Logs contain fixture data, not projects.
+if ! vim -Nu NONE -i NONE -n -es -S "$doctor_root/libexec/vim-config-doctor.vim"; then
+    doctor_failed=1
+fi
+if [ -f "$doctor_tmp/report" ]; then cat "$doctor_tmp/report"; fi
+if [ "$doctor_profile" = sandbox ]; then
+    printf '%s\n' 'Sandbox boundary: a fresh root omits /nfs before classifying root entries; helpers see an empty read-only placeholder.' \
+        'Extra nested deny roots require mountpoint resolution. Alternate storage aliases must be denied explicitly.'
+fi
+if [ "$doctor_mode" = quick ]; then
+    printf '%s\n' 'Use --lsp for temporary PHP/Go language-server initialization and Go standard-library navigation probes.'
+fi
+exit "$doctor_failed"

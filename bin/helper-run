@@ -1,0 +1,107 @@
+#!/bin/sh
+# Every editor helper goes through this launcher. No project traversal occurs here.
+set -eu
+
+usage() {
+    printf '%s\n' 'Usage: helper-run --profile container|sandbox|misc|laptop|wsl -- executable [arguments...]' >&2
+    exit 64
+}
+
+profile=
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --profile)
+            [ "$#" -ge 2 ] || usage
+            profile=$2
+            shift 2
+            ;;
+        --) shift; break ;;
+        *) usage ;;
+    esac
+done
+[ "$#" -gt 0 ] || usage
+case "$profile" in
+    container|misc|laptop|wsl)
+        if [ -n "${VIM_CONFIG_DENY_PATHS-}" ]; then
+            printf '%s\n' 'helper-run: hard exclusions require sandbox profile; helper was not started.' >&2
+            exit 69
+        fi
+        exec "$@"
+        ;;
+    sandbox) ;;
+    *) usage ;;
+esac
+
+# Always deny /nfs on Sandbox. Additional absolute paths are newline separated.
+# Validate lexically: do not stat, realpath, readlink, or test existence of a deny.
+deny_paths=$(printf '/nfs\n%s' "${VIM_CONFIG_DENY_PATHS-}")
+while IFS= read -r deny_path || [ -n "$deny_path" ]; do
+    [ -n "$deny_path" ] || continue
+    case "$deny_path" in
+        /|//|*//*|*/./*|*/../*|*/.|*/..|*/)
+            printf '%s\n' 'helper-run: deny paths must be normalized absolute directory paths, without a trailing slash.' >&2
+            exit 64
+            ;;
+        /*) ;;
+        *) printf '%s\n' 'helper-run: deny paths must be absolute.' >&2; exit 64 ;;
+    esac
+done <<EOF
+$deny_paths
+EOF
+
+for utility in unshare mount setpriv mktemp rmdir readlink ln mkdir; do
+    if ! command -v "$utility" >/dev/null 2>&1; then
+        printf 'helper-run: Sandbox isolation requires %s; helper was not started.\n' "$utility" >&2
+        exit 69
+    fi
+done
+chroot_path=$(command -v chroot || :)
+if [ -z "$chroot_path" ]; then
+    for chroot_candidate in /usr/sbin/chroot /sbin/chroot; do
+        if [ -x "$chroot_candidate" ]; then chroot_path=$chroot_candidate; break; fi
+    done
+fi
+if [ -z "$chroot_path" ]; then
+    printf '%s\n' 'helper-run: Sandbox isolation requires chroot; helper was not started.' >&2
+    exit 69
+fi
+
+launcher_dir=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd -P)
+unshare_path=$(command -v unshare)
+export VIM_CONFIG_MOUNT_EXECUTABLE="$(command -v mount)"
+export VIM_CONFIG_SETPRIV_EXECUTABLE="$(command -v setpriv)"
+export VIM_CONFIG_CHROOT_EXECUTABLE="$chroot_path"
+export VIM_CONFIG_DENY_PATHS="$deny_paths"
+# Keep only a pathname, never an open cwd handle into a root that will be masked.
+# Re-enter it through the isolated filesystem view after mounting the masks.
+export VIM_CONFIG_HELPER_CWD="$PWD"
+cd /
+root_view=$(mktemp -d /tmp/vim-config-root.XXXXXXXX)
+root_view=$(CDPATH='' cd -- "$root_view" && pwd -P)
+export VIM_CONFIG_ROOT_VIEW="$root_view"
+namespace_pid=
+cleanup() {
+    if [ -n "$namespace_pid" ]; then
+        # Kill the namespace supervisor; --kill-child=KILL then kills PID 1.
+        # A namespace PID 1 may ignore an ordinary default SIGTERM disposition.
+        kill -KILL "$namespace_pid" 2>/dev/null || :
+        wait "$namespace_pid" 2>/dev/null || :
+    fi
+    rmdir -- "$root_view" 2>/dev/null || :
+}
+trap cleanup EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+# A new root omits /nfs before looking at its entry; fresh proc is mounted there.
+# The root containing our temporary mount uses a nonrecursive bind; old proc
+# is omitted entirely. Other permitted trees retain their existing submounts.
+exec 3<&0
+"$unshare_path" --user --map-root-user --mount --pid --fork --kill-child=KILL \
+    --propagation private -- /bin/sh "$launcher_dir/libexec/helper-run-inner" "$@" <&3 3<&- &
+namespace_pid=$!
+exec 3<&-
+if wait "$namespace_pid"; then helper_status=0; else helper_status=$?; fi
+namespace_pid=
+exit "$helper_status"
