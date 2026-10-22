@@ -106,6 +106,20 @@ try
   call feedkeys("go back\<CR>", 'xt')
   call assert_equal(s:temp . '/first.txt', expand('%:p'))
 
+  " Exercise the Bash finder through the real async launcher and popup.
+  call mkdir(s:temp . '/.git')
+  call writefile(['picked'], s:temp . '/finder selection.txt')
+  call vimconfig#ui#files()
+  let s:find_start = reltime()
+  while empty(popup_list()) && reltimefloat(reltime(s:find_start)) < 5
+    sleep 10m
+  endwhile
+  call assert_false(empty(popup_list()), 'Bash file finder did not open its results')
+  if !empty(popup_list())
+    call feedkeys("finder selection\<CR>", 'xt')
+    call assert_equal(resolve(s:temp . '/finder selection.txt'), resolve(expand('%:p')))
+  endif
+
   " Fast mode is per-buffer and toggling restores the original syntax.
   setlocal filetype=text syntax=text
   let s:first = bufnr('%')

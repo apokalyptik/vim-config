@@ -20,7 +20,8 @@ SETUP
     bin/vim-config-doctor --profile PROFILE --lsp
     bin/vim-config file.php
 
-Setup unpacks checked-in tools without network access or compilation. Add
+Setup uses Bash 3.2+, tar, and sha256sum or openssl. It unpacks checked-in tools
+without network access or compilation. The file finder also uses Bash. Add
 --link-home only when you want to replace ~/.vimrc (the previous file is backed
 up). Environment VIM_CONFIG_PROFILE overrides the saved profile for a session.
 

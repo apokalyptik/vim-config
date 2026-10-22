@@ -1,0 +1,11 @@
+# vim-config payloads v1
+# id	platform	archive	sha256	destination	strip_components
+go1.27.3.darwin-arm64	darwin-arm64	payloads/go1.27.3.darwin-arm64.tar.gz	dd3908cf20959d798c1e06ebe5b72213f0505ce01373b40ce3110975a6cd99c2	darwin-arm64	0
+go1.27.3.linux-amd64	linux-x86_64	payloads/go1.27.3.linux-amd64.tar.gz	65efbc80fdc1fa2cd2631cad5b481777a68e8725f34e89f50fc6ac714e379b40	linux-x86_64	0
+gopls-v0.24.0-darwin-arm64	darwin-arm64	payloads/gopls-v0.24.0-darwin-arm64.tar.gz	31e07de904273f050cbeecd5eb992845fcb0e6b1ffd484351c193842ee1e047c	darwin-arm64	0
+gopls-v0.24.0-linux-x86_64	linux-x86_64	payloads/gopls-v0.24.0-linux-x86_64.tar.gz	1f2c318e6d0770cbfe35050eb10b164650439c75188b78e4b645fe26d143665b	linux-x86_64	0
+javascript-language-servers	all	payloads/javascript-language-servers.tar.gz	a3f23f82658f1846fbe9d435fccdff1dd3e465351fa217566f2e92d90fb5aae1	shared	0
+node-v24.22.1-darwin-arm64	darwin-arm64	payloads/node-v24.22.1-darwin-arm64.tar.gz	97b360e4f2a022be05f87fe62a8f5f0fcbe1d2b29b2554f7ccb0a0be69b745af	darwin-arm64	0
+node-v24.22.1-linux-x86_64	linux-x86_64	payloads/node-v24.22.1-linux-x86_64.tar.gz	bda0dc31f27fb5fb25b53387982b8ddd25d8accfe045d46b6d1aa3a28d8f9525	linux-x86_64	0
+phpantom-0.11.1-darwin-arm64	darwin-arm64	payloads/phpantom-0.11.1-darwin-arm64.tar.gz	ba32a40677fe2fa87f44f3f7ce6dda678a55a770d06d77f2fe128dcc742e17c6	darwin-arm64/bin	0
+phpantom-0.11.1-linux-x86_64	linux-x86_64	payloads/phpantom-0.11.1-linux-x86_64.tar.gz	906dd8104d4bf82aa1c4225fba297a90ff1cff0552df635ee858fc272f445fc6	linux-x86_64/bin	0

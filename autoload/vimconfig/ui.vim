@@ -167,7 +167,7 @@ function! vimconfig#ui#files() abort
   let l:root = empty(expand('%:p')) ? getcwd() : expand('%:p:h')
   if !vimconfig#path_allowed(l:root) | throw 'Project root is excluded' | endif
   let s:scan = {'root': l:root, 'paths': [], 'errors': []}
-  let l:job = vimconfig#job(['perl', vimconfig#root() . '/libexec/find-files.pl', l:root] + g:vimconfig_exclude_names,
+  let l:job = vimconfig#job(['bash', vimconfig#root() . '/libexec/find-files.bash', l:root] + g:vimconfig_exclude_names,
         \ {'out_cb': function('s:scan_line'), 'err_cb': function('s:scan_error'), 'close_cb': function('s:scan_closed'), 'out_mode': 'nl', 'err_mode': 'nl'})
   echo 'Finding project files…'
 endfunction

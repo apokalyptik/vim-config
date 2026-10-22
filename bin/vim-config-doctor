@@ -39,7 +39,7 @@ if command -v vim >/dev/null 2>&1; then
 else
     printf '%s\n' 'Vim: MISSING'; exit 69
 fi
-for doctor_tool in git svn diff tar php perl node go python3 curl wget unshare mount setpriv; do
+for doctor_tool in bash find git svn diff tar sha256sum openssl php node go python3 curl wget unshare mount setpriv; do
     printf '%s: ' "$doctor_tool"
     command -v "$doctor_tool" || printf '%s\n' 'not on host PATH (bundled runtimes checked separately)'
 done

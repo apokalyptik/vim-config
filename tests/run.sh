@@ -16,9 +16,12 @@ for test_script in tests/test-vcs.vim tests/test-ui.vim tests/test-lsp-client.vi
     printf 'PASS: %s\n' "$test_script"
 done
 tests/test-helper-run.sh
-perl -c libexec/setup.pl
-perl -c libexec/find-files.pl
-for script in bin/setup bin/vim-config bin/language-server bin/helper-run bin/vim-config-doctor libexec/helper-run-inner; do
+bash tests/test-setup.sh
+bash tests/test-find-files.sh
+for script in bin/setup libexec/find-files.bash; do
+    bash -n "$script"
+done
+for script in bin/vim-config bin/language-server bin/helper-run bin/vim-config-doctor libexec/helper-run-inner; do
     sh -n "$script"
 done
 python3 tools/prepare-bundle.py --verify

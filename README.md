@@ -22,7 +22,7 @@ Choose the profile for that host:
 | `laptop` | macOS ARM64 | Direct execution |
 | `wsl` | Home Windows through Linux x86-64 WSL | Direct execution |
 
-Setup verifies and unpacks only the current platform plus shared JavaScript servers into ignored `.state/tools`. About 284 MiB of compressed payloads are checked in for both platforms; unpacking a platform needs considerably more space. Setup writes inside this checkout. It does not alter your existing Vim configuration unless you explicitly add `--link-home`; that option backs up `~/.vimrc` before linking this configuration.
+Setup uses Bash (including macOS's bundled Bash 3.2), tar, and either `sha256sum` or `openssl`. It verifies and unpacks only the current platform plus shared JavaScript servers into ignored `.state/tools`. About 284 MiB of compressed payloads are checked in for both platforms; unpacking a platform needs considerably more space. Setup writes inside this checkout. It does not alter your existing Vim configuration unless you explicitly add `--link-home`; that option backs up `~/.vimrc` before linking this configuration.
 
 Use `./bin/vim-config --profile container file.php` for a one-off profile override. Keep the checkout at its installed location when using the home symlink. Re-run setup after updating the checked-out tools. Vim startup never runs setup or downloads tools.
 
@@ -71,4 +71,4 @@ Rainbow CSV provides CSV/TSV colours, column identification and manual validatio
 
 `bin/vim-config-doctor --quick` tests actual executable startup. `--lsp` additionally exercises language-server communication with temporary fixture files; no Python is required on the destination. F1 → Health shows paths/profile inside Vim. Use `:messages` for server startup errors. The doctor uses temporary workspaces/caches; ordinary language servers maintain their usual per-user/project caches.
 
-For maintainers, `python3 tools/prepare-bundle.py --verify` checks included payloads. `--rebuild` is an explicit online preparation operation on a build-capable machine, not part of installation. The small downstream LSP integration hooks are reapplied by `tools/patch-lsp.py`.
+The installer and file finder are Bash scripts; no custom Perl helper is used. For maintainers, `python3 tools/prepare-bundle.py --verify` checks included payloads and that the Bash-readable `tools/payloads.tsv` matches the JSON manifest. `--rebuild` is an explicit online preparation operation on a build-capable machine, not part of installation. The small downstream LSP integration hooks are reapplied by `tools/patch-lsp.py`.

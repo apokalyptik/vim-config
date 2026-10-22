@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Maintainer-only reproducible preparation; normal installation is fully offline.
 
---verify checks committed archives without downloading. --rebuild deliberately
+--verify checks committed archives and their Bash table without downloading. --rebuild deliberately
 uses the network and compiler on a preparation machine, never on target hosts.
 """
 import argparse
@@ -20,6 +20,62 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = ROOT / 'tools/vendor-manifest.json'
+PAYLOADS_TSV = ROOT / 'tools/payloads.tsv'
+
+
+def payloads_tsv(manifest):
+    """Generate the deliberately small, strict format consumed by Bash setup.
+
+    Six tab-separated ASCII fields, no escaping, with two comment header lines.
+    Only single-part gzip tar archives and the two supported platforms are
+    representable. Paths are relative to the checkout or extracted tools root.
+    """
+    if not isinstance(manifest, dict) or type(manifest.get('schema_version')) is not int or manifest['schema_version'] != 1:
+        raise RuntimeError('Unsupported vendor manifest schema')
+    payloads = manifest.get('payloads')
+    if not isinstance(payloads, list) or not payloads:
+        raise RuntimeError('Manifest requires a nonempty payload list')
+    lines = ['# vim-config payloads v1',
+             '# id\tplatform\tarchive\tsha256\tdestination\tstrip_components']
+    identifiers = set()
+    archives = set()
+    token = re.compile(r'[A-Za-z0-9][A-Za-z0-9._-]*\Z')
+    for payload in payloads:
+        if not isinstance(payload, dict):
+            raise RuntimeError('Payload entries must be objects')
+        ident = payload.get('id')
+        platform = payload.get('platform')
+        parts = payload.get('parts')
+        digest = payload.get('sha256')
+        destination = payload.get('destination')
+        strip = payload.get('strip_components')
+        if not isinstance(ident, str) or not token.fullmatch(ident) or ident in identifiers:
+            raise RuntimeError('Unsafe or duplicate payload identifier: ' + repr(ident))
+        if platform not in ('all', 'darwin-arm64', 'linux-x86_64'):
+            raise RuntimeError('Unsupported payload platform: ' + repr(platform))
+        if not isinstance(parts, list) or len(parts) != 1 or not isinstance(parts[0], str):
+            raise RuntimeError('Bash setup requires exactly one archive per payload: ' + ident)
+        archive_name = parts[0]
+        components = archive_name.split('/')
+        if len(components) < 2 or components[0] != 'payloads' or not archive_name.endswith('.tar.gz') or not all(token.fullmatch(part) and part not in ('.', '..') for part in components) or archive_name in archives:
+            raise RuntimeError('Unsafe, unsupported, or duplicate payload archive: ' + repr(archive_name))
+        if not isinstance(digest, str) or not re.fullmatch(r'[0-9a-f]{64}', digest):
+            raise RuntimeError('Payload SHA256 must contain 64 lowercase hex characters: ' + ident)
+        expected_root = 'shared' if platform == 'all' else platform
+        if not isinstance(destination, str) or destination.split('/')[0] != expected_root or not all(token.fullmatch(part) and part not in ('.', '..') for part in destination.split('/')):
+            raise RuntimeError('Unsafe or platform-mismatched payload destination: ' + repr(destination))
+        if type(strip) is not int or not 0 <= strip <= 99:
+            raise RuntimeError('Payload strip_components must be an integer between 0 and 99: ' + ident)
+        if type(payload.get('size_bytes')) is not int or payload['size_bytes'] <= 0:
+            raise RuntimeError('Payload size_bytes must be a positive integer: ' + ident)
+        identifiers.add(ident)
+        archives.add(archive_name)
+        lines.append('\t'.join([ident, platform, archive_name, digest, destination, str(strip)]))
+    return ('\n'.join(lines) + '\n').encode('ascii')
+
+
+def write_payloads_tsv(manifest):
+    PAYLOADS_TSV.write_bytes(payloads_tsv(manifest))
 
 
 def sha256(path):
@@ -300,10 +356,14 @@ def rebuild(work, manifest):
         payload['sha256'] = sha256(ROOT / payload['parts'][0])
         payload['size_bytes'] = (ROOT / payload['parts'][0]).stat().st_size
     MANIFEST.write_text(json.dumps(manifest, indent=2) + '\n')
+    write_payloads_tsv(manifest)
     print('Rebuilt offline payloads; review the manifest and archive changes before publication.')
 
 
 def verify(manifest):
+    expected_tsv = payloads_tsv(manifest)
+    if not PAYLOADS_TSV.exists() or PAYLOADS_TSV.read_bytes() != expected_tsv:
+        raise RuntimeError('tools/payloads.tsv differs from the JSON manifest; run tools/prepare-bundle.py --write-payloads-tsv')
     total = 0
     for payload in manifest['payloads']:
         digest = hashlib.sha256()
@@ -330,11 +390,15 @@ def main():
     actions = parser.add_mutually_exclusive_group(required=True)
     actions.add_argument('--verify', action='store_true')
     actions.add_argument('--rebuild', action='store_true')
+    actions.add_argument('--write-payloads-tsv', action='store_true', help='regenerate the Bash-readable payload table from the JSON manifest, without downloads')
     actions.add_argument('--collect-licenses', action='store_true', help=argparse.SUPPRESS)
     parser.add_argument('--work-dir', type=Path)
     args = parser.parse_args()
     manifest = json.loads(MANIFEST.read_text())
-    if args.verify:
+    payloads_tsv(manifest)  # Reject unsupported or unsafe rows before mutation.
+    if args.write_payloads_tsv:
+        write_payloads_tsv(manifest)
+    elif args.verify:
         verify(manifest)
     else:
         work = args.work_dir or Path(tempfile.mkdtemp(prefix='vim-config-bundle-'))

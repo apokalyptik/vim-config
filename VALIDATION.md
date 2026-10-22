@@ -7,6 +7,7 @@ This records local evidence, not certification of the user's remote hosts or the
 * macOS ARM64, system Vim 9.1.1752.
 * Vim **9.0.2142**, compiled locally solely to test the oldest supplied Vim version. Target installation does not compile Vim.
 * Offline setup verifies pinned archives and unpacks the macOS tool bundle.
+* Bash 3.2 runs setup with a PATH containing no Perl or Python. Small offline fixtures cover both SHA-256 backends, a corrupt archive, replacement rollback, a checkout path with spaces, and optional home-config backup. The same Bash installer unpacks the real macOS payloads.
 * PHPantom, Node, Go SDK and gopls executables start. The target-side doctor requires Vim and shell tools, not Python.
 * Real LSP requests pass for PHP, Go, JavaScript, HTML, CSS and JSON. Go resolves `fmt.Println` into the bundled standard library with module/toolchain fetching disabled.
 * Actual Vim client integration passes on both Vim versions: PHP method completion, cross-file definitions and incoming-call hierarchy.
