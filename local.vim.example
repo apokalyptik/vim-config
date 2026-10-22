@@ -1,0 +1,10 @@
+" Copy to local.vim (ignored by Git). It is loaded before any plugins.
+" Prefer bin/setup --profile ... or VIM_CONFIG_PROFILE for host selection.
+" Colour scheme defaults to vividchalk; uncomment to select another theme.
+" let g:vimconfig_colorscheme = 'vividchalk'
+let g:vimconfig_denied_paths = []
+let g:vimconfig_exclude_names = ['.git', '.svn', 'node_modules', '.state']
+" 500 KB / 15,000-line files retain full IDE support.
+let g:vimconfig_fast_bytes = 8 * 1024 * 1024
+let g:vimconfig_fast_lines = 100000
+" Emergency fallback: let g:vimconfig_no_lsp = 1

@@ -1,0 +1,2777 @@
+vim9script
+
+# LSP server functions
+#
+# The functions to send request messages to the language server are in this
+# file.
+#
+# Refer to https://microsoft.github.io/language-server-protocol/specification
+# for the Language Server Protocol (LSP) specificaiton.
+
+import './options.vim' as opt
+import './handlers.vim'
+import './util.vim'
+import './protocol.vim'
+import './capabilities.vim'
+import './offset.vim'
+import './diag.vim'
+import './selection.vim'
+import './symbol.vim'
+import './textedit.vim'
+import './completion.vim'
+import './hover.vim'
+import './signature.vim'
+import './codeaction.vim'
+import './codelens.vim'
+import './callhierarchy.vim' as callhier
+import './typehierarchy.vim' as typehier
+import './inlayhints.vim'
+import './semantichighlight.vim'
+import './buffer.vim' as buf
+
+const DIAG_PULL_DEBOUNCE_MSEC = 200
+const LSP_ERROR_SERVER_CANCELLED = -32802
+
+# LSP server standard output handler
+# LSP responses from server handled by channel job in LSP mode
+def Output_cb(lspserver: dict<any>, chan: channel, msg: any): void
+  # Downstream: ignore retired-family output after graceful stdin EOF.
+  if get(lspserver, 'vimConfigInputClosed', false)
+    return
+  endif
+  if lspserver.debug
+    if msg->has_key('id')
+      lspserver.traceLog($'Got request {msg->json_encode()}')
+    else
+      lspserver.traceLog($'Got notification {msg->json_encode()}')
+    endif
+  endif
+  lspserver.data = msg
+  lspserver.processMessage()
+enddef
+
+# LSP server error output handler
+def Error_cb(lspserver: dict<any>, chan: channel, emsg: string): void
+  lspserver.errorLog(emsg)
+enddef
+
+# LSP server exit callback
+def Exit_cb(lspserver: dict<any>, job: job, status: number): void
+  util.WarnMsg($'{strftime("%m/%d/%y %T")}: LSP server ({lspserver.name}) exited with status {status}')
+  if lspserver.diagnosticPullTimer != -1
+    timer_stop(lspserver.diagnosticPullTimer)
+    lspserver.diagnosticPullTimer = -1
+  endif
+  lspserver.pendingPullBufnrs = {}
+  lspserver.running = false
+  lspserver.ready = false
+enddef
+
+# Start a LSP server
+#
+def StartServer(lspserver: dict<any>, bnr: number): number
+  if lspserver.running
+    util.WarnMsg($'LSP server "{lspserver.name}" is already running')
+    return 0
+  endif
+
+  var cmd = [lspserver.path]
+  cmd->extend(lspserver.args)
+
+  var opts = {in_mode: 'lsp',
+		out_mode: 'lsp',
+		err_mode: 'raw',
+		noblock: 1,
+		out_cb: function(Output_cb, [lspserver]),
+		err_cb: function(Error_cb, [lspserver]),
+		exit_cb: function(Exit_cb, [lspserver])}
+
+  lspserver.data = ''
+  lspserver.vimConfigInputClosed = false
+  lspserver.vimConfigPhpTermSent = false
+  lspserver.caps = {}
+  lspserver.omniCompletePending = false
+  lspserver.completionLazyDoc = false
+  lspserver.completionTriggerChars = []
+  lspserver.signaturePopup = -1
+  lspserver.supportsWorkDoneProgress = false
+  lspserver.sawWorkDoneProgressEnd = false
+  lspserver.workDoneProgressTokens = {}
+  lspserver.pendingPullBufnrs = {}
+  lspserver.diagnosticPullTimer = -1
+
+  var job = cmd->job_start(opts)
+  if job->job_status() == 'fail'
+    util.ErrMsg($'Failed to start LSP server {lspserver.path}')
+    return 1
+  endif
+
+  # wait a little for the LSP server to start
+  sleep 10m
+
+  lspserver.job = job
+  lspserver.running = true
+
+  lspserver.initServer(bnr)
+
+  return 0
+enddef
+
+# process the "initialize" method reply from the LSP server
+# Result: InitializeResult
+def ServerInitReply(lspserver: dict<any>, initResult: dict<any>,
+                    initError: dict<any>): void
+  # Handle initialization error
+  if !initError->empty()
+    util.ErrMsg($'LSP server initialization failed: {initError.message}')
+    return
+  endif
+
+  if initResult->empty()
+    return
+  endif
+
+  var caps: dict<any> = initResult.capabilities
+  lspserver.caps = caps
+
+  for [key, val] in initResult->items()
+    if key == 'capabilities'
+      continue
+    endif
+
+    lspserver.caps[$'~additionalInitResult_{key}'] = val
+  endfor
+
+  capabilities.ProcessServerCaps(lspserver, caps)
+
+  if caps->has_key('completionProvider')
+    lspserver.completionTriggerChars =
+			caps.completionProvider->get('triggerCharacters', [])
+    lspserver.completionLazyDoc =
+			caps.completionProvider->get('resolveProvider', false)
+  endif
+
+  # send a "initialized" notification to server
+  lspserver.sendInitializedNotif()
+  # send any workspace configuration (optional)
+  if !lspserver.workspaceConfig->empty()
+    lspserver.sendWorkspaceConfig()
+  endif
+  lspserver.ready = true
+  if exists($'#User#LspServerReady{lspserver.name}')
+    exe $'doautocmd <nomodeline> User LspServerReady{lspserver.name}'
+  endif
+  # Used internally, and shouldn't be used by users
+  if exists($'#LSPBufferAutocmds#User#LspServerReady_{lspserver.id}')
+    exe $'doautocmd <nomodeline> LSPBufferAutocmds User LspServerReady_{lspserver.id}'
+  endif
+
+  # set the server debug trace level
+  if lspserver.traceLevel != 'off'
+    lspserver.setTrace(lspserver.traceLevel)
+  endif
+
+  # if the outline window is opened, then request the symbols for the current
+  # buffer
+  if bufwinid('LSP-Outline') != -1
+    lspserver.getDocSymbols(@%, true)
+  endif
+
+  # Update the inlay hints (if enabled)
+  if opt.lspOptions.showInlayHints && (lspserver.isInlayHintProvider
+				    || lspserver.isClangdInlayHintsProvider)
+    inlayhints.LspInlayHintsUpdateNow(bufnr())
+  endif
+enddef
+
+# Request: "initialize"
+# Param: InitializeParams
+def InitServer(lspserver: dict<any>, bnr: number)
+  # interface 'InitializeParams'
+  var initparams: dict<any> = {}
+  # Downstream: the editor is outside the Sandbox helper PID namespace.
+  initparams.processId = get(g:, 'vimconfig_profile', '') == 'sandbox' ? v:null : getpid()
+  initparams.clientInfo = {
+	name: 'Vim',
+	version: v:versionlong->string(),
+      }
+
+  # Compute the rootpath (based on the directory of the buffer)
+  var rootPath = ''
+  var rootSearchFiles = lspserver.rootSearchFiles
+  var bufDir = bnr->bufname()->fnamemodify(':p:h')
+  if !rootSearchFiles->empty()
+    rootPath = util.FindNearestRootDir(bufDir, rootSearchFiles)
+  endif
+  if rootPath->empty()
+    var cwd = getcwd()
+
+    # bufDir is within cwd
+    var bufDirPrefix = bufDir[0 : cwd->strcharlen() - 1]
+    if &fileignorecase
+        ? bufDirPrefix ==? cwd
+        : bufDirPrefix == cwd
+      rootPath = cwd
+    else
+      rootPath = bufDir
+    endif
+  endif
+
+  rootPath = rootPath->fnamemodify(':p')
+
+  if util.IsIgnoredRoot(rootPath, opt.lspOptions.workspaceIgnoredPaths)
+    rootPath = ''
+  endif
+
+  if rootPath->empty()
+    lspserver.workspaceFolders = []
+    initparams.rootPath = v:null
+    initparams.rootUri = v:null
+    initparams.workspaceFolders = []
+  else
+    lspserver.workspaceFolders = [rootPath]
+    var rootUri = util.LspFileToUri(rootPath)
+    initparams.rootPath = rootPath
+    initparams.rootUri = rootUri
+    initparams.workspaceFolders = [{
+      name: rootPath->fnamemodify(':t'),
+      uri: rootUri
+    }]
+  endif
+
+  initparams.trace = 'off'
+  initparams.capabilities = capabilities.GetClientCaps()
+  if !lspserver.initializationOptions->empty()
+    initparams.initializationOptions = lspserver.initializationOptions
+  else
+    initparams.initializationOptions = {}
+  endif
+
+  lspserver.rpcInitializeRequest = initparams
+
+  lspserver.rpc_a('initialize', initparams, ServerInitReply)
+enddef
+
+# Send a "initialized" notification to the language server
+def SendInitializedNotif(lspserver: dict<any>)
+  # Notification: 'initialized'
+  # Params: InitializedParams
+  lspserver.sendNotification('initialized')
+enddef
+
+# Request: shutdown
+# Param: void
+def ShutdownServer(lspserver: dict<any>, resp_timeout: number = -1): void
+  var opts = {}
+  if resp_timeout != -1
+    opts.timeout = resp_timeout
+  endif
+  lspserver.rpc('shutdown', v:null, opts)
+  if lspserver.debug
+    lspserver.traceLog($'Sent shutdown request with {resp_timeout}ms timeout')
+  endif
+enddef
+
+# Send a 'exit' notification to the language server
+def ExitServer(lspserver: dict<any>): void
+  # Notification: 'exit'
+  # Params: void
+  lspserver.sendNotification('exit')
+enddef
+
+# Stop a LSP server
+def StopServer(lspserver: dict<any>): number
+  # Downstream: no job_stop fallback while container children may be alive.
+  if get(g:, 'vimconfig_profile', '') == 'container' && exists('*g:VimConfigLspStopFamily')
+    return g:VimConfigLspStopFamily(lspserver) ? 0 : 1
+  endif
+  if !lspserver.running
+    util.WarnMsg($'LSP server {lspserver.name} is not running')
+    return 0
+  endif
+
+  # Send the shutdown request to the server
+  lspserver.shutdownServer()
+
+  # Notify the server to exit
+  lspserver.exitServer()
+
+  # Wait for the server to process the exit notification and exit for a
+  # maximum of 2 seconds.
+  var maxCount: number = 1000
+  var job = lspserver.job
+  while job->job_status() == 'run' && maxCount > 0
+    sleep 2m
+    maxCount -= 1
+  endwhile
+
+  if job->job_status() == 'run'
+    job->job_stop()
+  endif
+  if lspserver.diagnosticPullTimer != -1
+    timer_stop(lspserver.diagnosticPullTimer)
+    lspserver.diagnosticPullTimer = -1
+  endif
+  lspserver.pendingPullBufnrs = {}
+  lspserver.running = false
+  lspserver.ready = false
+  return 0
+enddef
+
+# Set the language server trace level using the '$/setTrace' notification.
+# Supported values for "traceVal" are "off", "messages" and "verbose".
+def SetTrace(lspserver: dict<any>, traceVal: string)
+  # Notification: '$/setTrace'
+  # Params: SetTraceParams
+  var params = {value: traceVal}
+  lspserver.sendNotification('$/setTrace', params)
+enddef
+
+# Log a debug message to the LSP server debug file
+def TraceLog(lspserver: dict<any>, msg: string)
+  if lspserver.debug
+    util.TraceLog(lspserver.logfile, false, msg)
+  endif
+enddef
+
+# Log an error message to the LSP server error file
+def ErrorLog(lspserver: dict<any>, errmsg: string)
+  if lspserver.debug
+    util.TraceLog(lspserver.errfile, true, errmsg)
+  endif
+enddef
+
+# create a LSP server response message
+def CreateResponse(lspserver: dict<any>, req_id: any): dict<any>
+  var resp = {
+    jsonrpc: '2.0',
+    id: req_id
+  }
+  return resp
+enddef
+
+# create a LSP server notification message
+def CreateNotification(lspserver: dict<any>, notif: string): dict<any>
+  var req = {
+    jsonrpc: '2.0',
+    method: notif,
+    params: {}
+  }
+
+  return req
+enddef
+
+# send a response message to the server
+def SendResponse(lspserver: dict<any>, request: dict<any>, result: any, error: dict<any>)
+  var reqid = request.id
+  var idType = reqid->type()
+  if idType != v:t_string && idType != v:t_number
+    util.ErrMsg($'request.id ({reqid->string()}) of response to LSP server must be a number or a string')
+    return
+  endif
+  var resp: dict<any> = lspserver.createResponse(reqid)
+  if error->empty()
+    resp.result = result
+  else
+    resp.error = error
+  endif
+  lspserver.sendMessage(resp)
+enddef
+
+# Send a message to LSP server without callback support
+def SendMessage(lspserver: dict<any>, content: dict<any>): void
+  var job = lspserver.job
+  if job->job_status() != 'run'
+    # LSP server has exited
+    return
+  endif
+  if content->has_key('id') && content.id->type() == v:t_string
+    SendRawMessage(job, content)
+  else
+    job->ch_sendexpr(content)
+  endif
+  if lspserver.debug
+    if content->has_key('id')
+      lspserver.traceLog($'Sent response {content->json_encode()}')
+    else
+      lspserver.traceLog($'Sent notification {content->json_encode()}')
+    endif
+  endif
+enddef
+
+def SendRawMessage(job: job, content: dict<any>): void
+  var body = content->json_encode()
+  var rawmsg = $"Content-Length: {body->len()}\r\n\r\n{body}"
+  job->job_getchannel()->ch_sendraw(rawmsg)
+enddef
+
+# Send a notification message to the language server
+def SendNotification(lspserver: dict<any>, method: string, params: any = {})
+  var notif: dict<any> = CreateNotification(lspserver, method)
+  notif.params->extend(params)
+  # Downstream: exit has void params; PHPantom expects them omitted.
+  if method == 'exit'
+    notif->remove('params')
+  endif
+  lspserver.sendMessage(notif)
+enddef
+
+const LSP_ERROR_REQUEST_CANCELLED = -32800
+
+const lsp_errmsg_map: dict<string> = {
+  -32001: 'UnknownErrorCode',
+  -32002: 'ServerNotInitialized',
+  -32600: 'InvalidRequest',
+  -32601: 'MethodNotFound',
+  -32602: 'InvalidParams',
+  -32603: 'InternalError',
+  -32700: 'ParseError',
+  -32800: 'RequestCancelled',
+  -32801: 'ContentModified',
+  -32802: 'ServerCancelled',
+  -32803: 'RequestFailed'
+}
+
+# Translate an LSP error code into a readable string
+def LspGetErrorMessage(errcode: number): string
+  return lsp_errmsg_map->get(errcode, errcode->string())
+enddef
+
+# Process a LSP server response error and display an error message.
+def ProcessLspServerError(method: string, responseError: dict<any>)
+  # request failed
+
+  if responseError.code == LSP_ERROR_REQUEST_CANCELLED
+    # if the request is canceled, silently return.
+    return
+  endif
+
+  var emsg: string = responseError.message
+  emsg ..= $', error = {LspGetErrorMessage(responseError.code)}'
+  if responseError->has_key('data')
+    emsg ..= $', data = {responseError.data->string()}'
+  endif
+  util.ErrMsg($'request {method} failed ({emsg})')
+enddef
+
+# Send a sync RPC request message to the LSP server and return the received
+# reply.  In case of an error, an empty Dict is returned.
+def Rpc(lspserver: dict<any>, method: string, params: any, opts: dict<any> = {}): dict<any>
+  var req = {
+    method: method,
+    params: params
+  }
+  # Downstream: PHPantom expects shutdown to omit optional params entirely.
+  if method == 'shutdown'
+    req->remove('params')
+  endif
+
+  var job = lspserver.job
+  if job->job_status() != 'run'
+    # LSP server has exited
+    return {}
+  endif
+
+  var ch_opts = {}
+  var timeout: number = opts->get('timeout', -1)
+  if timeout != -1
+    ch_opts.timeout = timeout
+  endif
+
+  # Do the synchronous RPC call
+  var reply = job->ch_evalexpr(req, ch_opts)
+
+  if lspserver.debug
+    if reply->has_key('id')
+      req = {id: reply.id}->extend(req)
+    endif
+    lspserver.traceLog($'Sent request {req->json_encode()}')
+    lspserver.traceLog($'Got response {reply->json_encode()}')
+  endif
+
+  if reply->has_key('result')
+    # successful reply
+    return reply
+  endif
+
+  var handleError: bool = opts->get('handleError', true)
+
+  if reply->has_key('error') && handleError
+    # request failed
+    ProcessLspServerError(method, reply.error)
+  endif
+
+  return {}
+enddef
+
+# LSP server asynchronous RPC callback
+def AsyncRpcCb(lspserver: dict<any>, method: string, RpcCb: func, chan: channel, reply: dict<any>)
+  if lspserver.debug
+    lspserver.traceLog($'Got response {reply->json_encode()}')
+  endif
+
+  var result: any = v:null
+  var error: dict<any> = {}
+
+  if !reply->empty()
+    if reply->has_key('error')
+      # Capture error details
+      error = reply.error
+      ProcessLspServerError(method, error)
+    elseif !reply->has_key('result')
+      # No result and no error is itself an error
+      error = {
+        code: -32603,
+        message: 'Internal error',
+        data: $'request {method} failed (no result)'
+      }
+      util.ErrMsg($'request {method} failed (no result)')
+    elseif reply.result != v:null
+      # Success case
+      result = reply.result
+    endif
+  endif
+
+  # Pass both result AND error to callback
+  try
+    RpcCb(lspserver, result, error)
+  catch
+    # backwards compatibility for old callback signature
+    var retry: bool = false
+    if v:exception =~# '\v:(E118):'
+      if exists_compiled('v:stacktrace')
+	retry = expand('<script>:p') == v:stacktrace[-1]['filepath']
+      else
+	retry = v:throwpoint =~# 'AsyncRpcCb,\s\+line\s\+\d'
+      endif
+    endif
+    if retry
+      try
+        RpcCb(lspserver, result)
+      catch
+        lspserver.errorLog($'Callback for {method} raised exception: {v:exception}')
+      endtry
+    else
+      lspserver.errorLog($'Callback for {method} raised exception: {v:exception}')
+    endif
+  endtry
+enddef
+
+# Send an async RPC request message to the LSP server with a callback function.
+# Returns the LSP message id.  This id can be used to cancel the RPC request
+# (if needed).  Returns -1 on error.
+def AsyncRpc(lspserver: dict<any>, method: string, params: any, Cbfunc: func): number
+  var req = {
+    method: method,
+    params: params
+  }
+  # Downstream: PHPantom expects shutdown to omit optional params entirely.
+  if method == 'shutdown'
+    req->remove('params')
+  endif
+
+  var job = lspserver.job
+  if job->job_status() != 'run'
+    # LSP server has exited
+    return -1
+  endif
+
+  # Do the asynchronous RPC call
+  var Fn = function('AsyncRpcCb', [lspserver, method, Cbfunc])
+
+  var reply: dict<any>
+  if get(g:, 'LSPTest')
+    # When running LSP tests, make this a synchronous RPC call
+    reply = Rpc(lspserver, method, params)
+    Fn(test_null_channel(), reply)
+  else
+    # Otherwise, make an asynchronous RPC call
+    reply = job->ch_sendexpr(req, {callback: Fn})
+  endif
+  if reply->empty()
+    return -1
+  endif
+
+  if lspserver.debug
+    var logreq = {id: reply.id}->extend(req)
+    lspserver.traceLog($'Sent request {logreq->json_encode()}')
+  endif
+
+  return reply.id
+enddef
+
+# Returns true when the "lspserver" has "feature" enabled.
+# By default, all the features of a lsp server are enabled.
+def FeatureEnabled(lspserver: dict<any>, feature: string): bool
+  return lspserver.features->get(feature, true)
+enddef
+
+# Retrieve the Workspace configuration asked by the server.
+# Request: workspace/configuration
+def WorkspaceConfigGet(lspserver: dict<any>, configItem: dict<any>): dict<any>
+  if lspserver.workspaceConfig->empty()
+    return {}
+  endif
+  if !configItem->has_key('section') || configItem.section->empty()
+    return lspserver.workspaceConfig
+  endif
+  var config: dict<any> = lspserver.workspaceConfig
+  for part in configItem.section->split('\.')
+    if !config->has_key(part)
+      return {}
+    endif
+    config = config[part]
+  endfor
+  return config
+enddef
+
+# Update semantic highlighting for buffer "bnr"
+# Request: textDocument/semanticTokens/full or
+#	   textDocument/semanticTokens/full/delta
+def SemanticHighlightUpdate(lspserver: dict<any>, bnr: number)
+  if !lspserver.isSemanticTokensProvider
+    return
+  endif
+
+  # Send the pending buffer changes to the language server
+  bnr->listener_flush()
+
+  # Capture the current changedtick
+  var requestTick = getbufvar(bnr, 'changedtick')
+
+  var method = 'textDocument/semanticTokens/full'
+  var params: dict<any> = {
+    textDocument: {
+      uri: util.LspBufnrToUri(bnr)
+    }
+  }
+
+  # Should we send a semantic tokens delta request instead of a full request?
+  if lspserver.semanticTokensDelta
+    var prevResultId: string = ''
+    prevResultId = bnr->getbufvar('LspSemanticResultId', '')
+    if prevResultId != ''
+      # semantic tokens delta request
+      params.previousResultId = prevResultId
+      method ..= '/delta'
+    endif
+  endif
+
+  lspserver.rpc_a(method, params, (_, reply, error) => {
+    semantichighlight.UpdateTokens(lspserver, reply, error, bnr, requestTick)
+  })
+enddef
+
+# Send a "workspace/didChangeConfiguration" notification to the language
+# server.
+def SendWorkspaceConfig(lspserver: dict<any>)
+  # Params: DidChangeConfigurationParams
+  var params = {settings: lspserver.workspaceConfig}
+  lspserver.sendNotification('workspace/didChangeConfiguration', params)
+enddef
+
+def LinesText(lines: list<string>, hasEol: bool): string
+  var text = lines->join("\n")
+  if hasEol
+    text ..= "\n"
+  endif
+  return text
+enddef
+
+def BufferText(bnr: number): string
+  return LinesText(bnr->getbufline(1, '$'), bnr->getbufvar('&eol'))
+enddef
+
+def HunkText(newBufLines: list<string>, hunk: dict<number>, hasEol: bool): string
+  if hunk.to_count == 0
+    return ''
+  endif
+
+  var lastIdx = hunk.to_idx + hunk.to_count - 1
+  var text = newBufLines[hunk.to_idx : lastIdx]->join("\n")
+  # Append a newline when there is more buffer content after this hunk (so
+  # the replaced range boundary falls between lines), or when the buffer has
+  # a trailing end-of-line and this hunk reaches the last line.
+  if lastIdx < newBufLines->len() - 1 || hasEol
+    text ..= "\n"
+  endif
+  return text
+enddef
+
+# Length of "line" in the position encoding negotiated with the server
+# ("posEncoding": 8, 16 or 32).  Used to anchor a range to the end of a line
+# that only exists in a cached (old-document) snapshot, so
+# offset.EncodePosition() (which reads the live buffer) doesn't apply.
+def EncodedLineLen(lspserver: dict<any>, line: string): number
+  if lspserver.posEncoding == 8
+    return line->strlen()
+  elseif lspserver.posEncoding == 16
+    return line->strutf16len(true)
+  else
+    return line->strchars()
+  endif
+enddef
+
+# Send a file/document opened notification to the language server.
+def TextdocDidOpen(lspserver: dict<any>, bnr: number, ftype: string): void
+  # Notification: 'textDocument/didOpen'
+  # Params: DidOpenTextDocumentParams
+
+  var languageId: string = ftype
+
+  if type(lspserver.languageId) == v:t_func
+    try
+      languageId = lspserver.languageId()
+    catch /^Vim\%((\S\+)\)\=:E/
+    endtry
+  endif
+
+  var newBufLines = bnr->getbufline(1, '$')
+  lspserver.cachedBufferContent[bnr] = newBufLines
+  lspserver.cachedBufferEol[bnr] = bnr->getbufvar('&eol')
+
+  if !lspserver.supportsDidOpenClose
+    return
+  endif
+
+  var params = {
+    textDocument: {
+      uri: util.LspBufnrToUri(bnr),
+      languageId: languageId,
+      # Use Vim 'changedtick' as the LSP document version number
+      version: bnr->getbufvar('changedtick'),
+      text: LinesText(newBufLines, bnr->getbufvar('&eol'))
+    }
+  }
+  lspserver.sendNotification('textDocument/didOpen', params)
+enddef
+
+# Send a file/document closed notification to the language server.
+def TextdocDidClose(lspserver: dict<any>, bnr: number): void
+  # Notification: 'textDocument/didClose'
+  # Params: DidCloseTextDocumentParams
+
+  var params = {
+    textDocument: {
+      uri: util.LspBufnrToUri(bnr)
+    }
+  }
+  if lspserver.supportsDidOpenClose
+    lspserver.sendNotification('textDocument/didClose', params)
+  endif
+  if lspserver.cachedBufferContent->has_key(bnr)
+    lspserver.cachedBufferContent->remove(bnr)
+  endif
+  if lspserver.cachedBufferEol->has_key(bnr)
+    lspserver.cachedBufferEol->remove(bnr)
+  endif
+  if lspserver.diagnosticResultIds->has_key(bnr)
+    lspserver.diagnosticResultIds->remove(bnr)
+  endif
+  if lspserver.pendingPullBufnrs->has_key(bnr)
+    lspserver.pendingPullBufnrs->remove(bnr)
+  endif
+enddef
+
+def RestartDiagnosticPullTimer(lspserver: dict<any>)
+  if lspserver.diagnosticPullTimer != -1
+    timer_stop(lspserver.diagnosticPullTimer)
+  endif
+  lspserver.diagnosticPullTimer = timer_start(
+    DIAG_PULL_DEBOUNCE_MSEC,
+    function(FlushQueuedDiagnosticsPull, [lspserver])
+  )
+enddef
+
+def QueuePullDiagnostics(lspserver: dict<any>, bnr: number)
+  if !lspserver.running || !lspserver.ready || !lspserver.isDiagnosticsProvider
+    return
+  endif
+
+  if bnr->bufloaded() == 0 || buf.BufLspServerGetById(bnr, lspserver.id)->empty()
+    return
+  endif
+
+  lspserver.pendingPullBufnrs[bnr] = true
+  RestartDiagnosticPullTimer(lspserver)
+enddef
+
+def QueuePullDiagnosticsAllBuffers(lspserver: dict<any>)
+  if !lspserver.running || !lspserver.ready || !lspserver.isDiagnosticsProvider
+    return
+  endif
+
+  for bnr in buf.BufGetServerBufnrs(lspserver)
+    if bnr->bufloaded() == 1
+      lspserver.pendingPullBufnrs[bnr] = true
+    endif
+  endfor
+
+  if lspserver.pendingPullBufnrs->empty()
+    return
+  endif
+
+  RestartDiagnosticPullTimer(lspserver)
+enddef
+
+def FlushQueuedDiagnosticsPull(lspserver: dict<any>, _timerid: number)
+  lspserver.diagnosticPullTimer = -1
+  if !lspserver.running || !lspserver.ready || !lspserver.isDiagnosticsProvider
+    lspserver.pendingPullBufnrs = {}
+    return
+  endif
+
+  var bufs = lspserver.pendingPullBufnrs->keys()->map((_, k) => str2nr(k))
+  lspserver.pendingPullBufnrs = {}
+
+  for bnr in bufs
+    if bnr->bufloaded() == 0 || buf.BufLspServerGetById(bnr, lspserver.id)->empty()
+      continue
+    endif
+    lspserver.pullDiagnostics(bnr)
+  endfor
+enddef
+
+# Pull diagnostics for a document.
+# Request: "textDocument/diagnostic"
+# Param: DocumentDiagnosticParams
+def PullDiagnostics(lspserver: dict<any>, bnr: number)
+  if !lspserver.isDiagnosticsProvider
+    util.ErrMsg('LSP server does not support pull diagnostics')
+    return
+  endif
+
+  # Send any pending changes before asking for diagnostics.
+  bnr->listener_flush()
+
+  var uri = util.LspBufnrToUri(bnr)
+  var params: dict<any> = {
+    textDocument: {
+      uri: uri
+    }
+  }
+
+  var prevResultId = lspserver.diagnosticResultIds->get(bnr, '')
+  if prevResultId != ''
+    params.previousResultId = prevResultId
+  endif
+
+  var reply = lspserver.rpc('textDocument/diagnostic', params,
+                            {handleError: false})
+
+  # If the language server cancels the pull diagnostic request and asks for a
+  # retrigger, then send the pull diagnostic request again.
+  if reply->has_key('error')
+    var responseError: dict<any> = reply.error
+    var errorData = responseError->get('data', {})
+    if responseError.code == LSP_ERROR_SERVER_CANCELLED
+        && errorData->type() == v:t_dict
+        && errorData->get('retriggerRequest', false)
+      lspserver.queuePullDiagnostics(bnr)
+    else
+      ProcessLspServerError('textDocument/diagnostic', responseError)
+    endif
+    return
+  endif
+
+  # Result: DocumentDiagnosticReport | null
+  if reply->empty() || reply.result == v:null || reply.result->empty()
+    return
+  endif
+
+  var report: dict<any> = reply.result
+  var reportKind = report->get('kind', '')
+
+  if reportKind == 'full'
+    var items = report->get('items', [])
+    var waitForInitialProgress = lspserver.supportsWorkDoneProgress
+      && !lspserver.sawWorkDoneProgressEnd
+    if items->empty() && waitForInitialProgress
+      return
+    endif
+    diag.DiagNotification(lspserver, uri, items, 'pull')
+  elseif reportKind != 'unchanged'
+    util.WarnMsg($'Unsupported diagnostic report kind "{reportKind}"')
+  endif
+
+  if report->has_key('resultId')
+    lspserver.diagnosticResultIds[bnr] = report.resultId
+  elseif reportKind == 'full' && lspserver.diagnosticResultIds->has_key(bnr)
+    lspserver.diagnosticResultIds->remove(bnr)
+  endif
+enddef
+
+# Send a file/document change notification to the language server.
+# Params: DidChangeTextDocumentParams
+def TextdocDidChange(lspserver: dict<any>, bnr: number): void
+  # Notification: 'textDocument/didChange'
+  # Params: DidChangeTextDocumentParams
+
+  # Nothing to do when the server doesn't want change notifications.
+  var textDocumentSync = lspserver.textDocumentSync
+  if textDocumentSync == protocol.TextDocumentSyncKindNone
+    return
+  endif
+
+  var contentChanges: list<dict<any>>
+
+  if textDocumentSync == protocol.TextDocumentSyncKindFull
+	|| !opt.lspOptions.incrementalSync
+    # TextDocumentSyncKind: Full — send the entire buffer on every change.
+    contentChanges = [{text: BufferText(bnr)}]
+  elseif exists_compiled('*diff')
+    # TextDocumentSyncKind: Incremental — send only the changed lines.
+    var newBufLines = bnr->getbufline(1, '$')
+    var hasEol = bnr->getbufvar('&eol')
+    var cachedBufferContent = lspserver.cachedBufferContent
+    var cachedBufferEol = lspserver.cachedBufferEol
+    if cachedBufferContent->has_key(bnr)
+	&& cachedBufferEol[bnr] == hasEol
+      # Compute line-level diffs against the last snapshot and convert each
+      # hunk into an LSP TextDocumentContentChangeEvent.  Hunks are emitted
+      # bottom-up: the LSP spec applies contentChanges entries sequentially,
+      # so a top-down hunk's range would be interpreted against a document
+      # already shifted by an earlier hunk in the same notification.
+      contentChanges = []
+      var oldBufLines = cachedBufferContent[bnr]
+      var oldLineCount = oldBufLines->len()
+      var diffs = diff(oldBufLines, newBufLines, {output: 'indices'})
+      for hunk in diffs->copy()->reverse()
+	var startLine = hunk.from_idx
+	var startChar = 0
+	var endLine = hunk.from_idx + hunk.from_count
+	var endChar = 0
+	var text = HunkText(newBufLines, hunk, hasEol)
+	if !hasEol && endLine == oldLineCount
+	  # The old document has no trailing newline, so
+	  # {line: oldLineCount, character: 0} isn't a valid position in it;
+	  # anchor to the end of the last line instead.  When the hunk
+	  # doesn't start at the first line, pull the start back over the
+	  # newline that precedes it too, so that line's break is removed.
+	  endLine = oldLineCount - 1
+	  endChar = EncodedLineLen(lspserver, oldBufLines[endLine])
+	  if startLine > 0
+	    startLine -= 1
+	    startChar = EncodedLineLen(lspserver, oldBufLines[startLine])
+	    if !text->empty()
+	      text = "\n" .. text
+	    endif
+	  endif
+	endif
+	contentChanges->add({
+	  range: {
+	    start: {line: startLine, character: startChar},
+	    end:   {line: endLine, character: endChar}
+	  },
+	  text: text
+	})
+      endfor
+    else
+      # No cached snapshot available, or its line-ending state doesn't
+      # match the current buffer (the old-document end-of-file math above
+      # would be wrong); fall back to a full-text change.
+      contentChanges = [{text: LinesText(newBufLines, hasEol)}]
+    endif
+    cachedBufferContent[bnr] = newBufLines
+    cachedBufferEol[bnr] = hasEol
+  endif
+
+  if contentChanges->empty()
+    return
+  endif
+
+  var params = {
+    textDocument: {
+      uri: util.LspBufnrToUri(bnr),
+      # Use Vim 'changedtick' as the LSP document version number
+      version: bnr->getbufvar('changedtick')
+    },
+    contentChanges: contentChanges
+  }
+  lspserver.sendNotification('textDocument/didChange', params)
+enddef
+
+# Return the current cursor position as a LSP position.
+# find_ident will search for a identifier in front of the cursor, just like
+# CTRL-] and c_CTRL-R_CTRL-W does.
+#
+# LSP line and column numbers start from zero, whereas Vim line and column
+# numbers start from one. The LSP column number is the character index in the
+# line and not the byte index in the line.
+def GetPosition(lspserver: dict<any>, find_ident: bool): dict<number>
+  var lnum: number = line('.') - 1
+  var col: number = charcol('.') - 1
+  var line = getline('.')
+
+  if find_ident
+    # 1. skip to start of identifier
+    while line[col] != '' && line[col] !~ '\k'
+      col = col + 1
+    endwhile
+
+    # 2. back up to start of identifier
+    while col > 0 && line[col - 1] =~ '\k'
+      col = col - 1
+    endwhile
+  endif
+
+  # Compute character index counting composing characters as separate
+  # characters
+  var pos = {line: lnum, character: util.GetCharIdxWithCompChar(line, col)}
+  lspserver.encodePosition(bufnr(), pos)
+
+  return pos
+enddef
+
+# Return the current file name and current cursor position as a LSP
+# TextDocumentPositionParams structure
+def GetTextDocPosition(lspserver: dict<any>, find_ident: bool): dict<dict<any>>
+  # interface TextDocumentIdentifier
+  # interface Position
+  return {textDocument: {uri: util.LspFileToUri(@%)},
+	  position: lspserver.getPosition(find_ident)}
+enddef
+
+# Get a list of completion items.
+# Request: "textDocument/completion"
+# Param: CompletionParams
+def GetCompletion(lspserver: dict<any>, triggerKind_arg: number, triggerChar: string): void
+  # Check whether LSP server supports completion
+  if !lspserver.isCompletionProvider
+    util.ErrMsg('LSP server does not support completion')
+    return
+  endif
+
+  var fname = @%
+  if fname->empty()
+    return
+  endif
+
+  # interface CompletionParams
+  #   interface TextDocumentPositionParams
+  var params = lspserver.getTextDocPosition(false)
+  #   interface CompletionContext
+  params.context = {triggerKind: triggerKind_arg}
+  if triggerKind_arg == protocol.CompletionTriggerKindTriggerCharacter && !triggerChar->empty()
+    params.context.triggerCharacter = triggerChar
+  endif
+
+  lspserver.rpc_a('textDocument/completion', params,
+			(_, reply, error) => completion.CompletionReply(lspserver, reply, error))
+enddef
+
+# Get lazy properties for a completion item.
+# Request: "completionItem/resolve"
+# Param: CompletionItem
+def ResolveCompletion(lspserver: dict<any>, item: dict<any>, sync: bool = false): dict<any>
+  # Check whether LSP server supports completion item resolve
+  if !lspserver.isCompletionResolveProvider
+    return {}
+  endif
+
+  # interface CompletionItem
+  if sync
+    var reply = lspserver.rpc('completionItem/resolve', item)
+    if !reply->empty() && !reply.result->empty()
+      return reply.result
+    endif
+  else
+    lspserver.rpc_a('completionItem/resolve', item,
+			  (_, reply, error) => completion.CompletionResolveReply(lspserver, reply, error))
+  endif
+  return {}
+enddef
+
+# Jump to or peek a symbol location.
+#
+# Send 'msg' to a LSP server and process the reply.  'msg' is one of the
+# following:
+#   textDocument/definition
+#   textDocument/declaration
+#   textDocument/typeDefinition
+#   textDocument/implementation
+#
+# Process the LSP server reply and jump to the symbol location.  Before
+# jumping to the symbol location, save the current cursor position in the tag
+# stack.
+#
+# If 'peekSymbol' is true, then display the symbol location in the preview
+# window but don't jump to the symbol location.
+#
+# Result: Location | Location[] | LocationLink[] | null
+def GotoSymbolLoc(lspserver: dict<any>, msg: string, peekSymbol: bool,
+		  cmdmods: string, count: number)
+  var reply = lspserver.rpc(msg, lspserver.getTextDocPosition(true), {handleError: false})
+  if reply->empty() || reply.result->empty()
+    var emsg: string
+    if msg == 'textDocument/declaration'
+      emsg = 'symbol declaration is not found'
+    elseif msg == 'textDocument/typeDefinition'
+      emsg = 'symbol type definition is not found'
+    elseif msg == 'textDocument/implementation'
+      emsg = 'symbol implementation is not found'
+    else
+      if &tagfunc !=# 'lsp#lsp#TagFunc' && opt.lspOptions.definitionFallback
+	emsg = 'symbol definition is not found; falling back to tags file'
+	try
+	  # Use :tjump instead of 'CTRL-]' using :tag because
+	  # 'tjump' works better with multiple tags.
+	  # Use commands as mappings close selection dialog immediately!
+	  if peekSymbol
+	    execute (v:count > 0 ? ':' .. v:count .. 'ptag' : 'ptjump') expand('<cword>')
+	  else
+	    execute (v:count > 0 ? ':' .. v:count .. 'tag' : 'tjump') expand('<cword>')
+	  endif
+	catch /^Vim\%((\a\+)\)\=:E42[36]/
+	endtry
+      else
+	emsg = 'symbol definition is not found'
+      endif
+    endif
+
+    util.WarnMsg(emsg)
+    return
+  endif
+
+  var result = reply.result
+  var location: dict<any>
+  if result->type() == v:t_list
+    if count == 0
+      # When there are multiple symbol locations, and a specific one isn't
+      # requested with 'count', display the locations in a location list.
+      if result->len() > 1
+	var title: string = ''
+	if msg == 'textDocument/declaration'
+	  title = 'Declarations'
+	elseif msg == 'textDocument/typeDefinition'
+	  title = 'Type Definitions'
+	elseif msg == 'textDocument/implementation'
+	  title = 'Implementations'
+	else
+	  title = 'Definitions'
+	endif
+
+	if lspserver.needOffsetEncoding
+	  # Decode the position encoding in all the symbol locations
+	  result->map((_, loc) => {
+	    lspserver.decodeLocation(loc)
+	    return loc
+	  })
+	endif
+
+	symbol.ShowLocations(lspserver, result, peekSymbol, title)
+	return
+      endif
+    endif
+
+    # Select the location requested in 'count'
+    var idx = count - 1
+    if idx >= result->len()
+      idx = result->len() - 1
+    endif
+    location = result[idx]
+  else
+    location = result
+  endif
+  lspserver.decodeLocation(location)
+
+  symbol.GotoSymbol(lspserver, location, peekSymbol, cmdmods)
+enddef
+
+# Request: "textDocument/definition"
+# Param: DefinitionParams
+def GotoDefinition(lspserver: dict<any>, peek: bool, cmdmods: string, count: number)
+  # Check whether LSP server supports jumping to a definition
+  if !lspserver.isDefinitionProvider
+    util.ErrMsg('Jumping to a symbol definition is not supported')
+    return
+  endif
+
+  # interface DefinitionParams
+  #   interface TextDocumentPositionParams
+  GotoSymbolLoc(lspserver, 'textDocument/definition', peek, cmdmods, count)
+enddef
+
+# Request: "textDocument/declaration"
+# Param: DeclarationParams
+def GotoDeclaration(lspserver: dict<any>, peek: bool, cmdmods: string, count: number)
+  # Check whether LSP server supports jumping to a declaration
+  if !lspserver.isDeclarationProvider
+    util.ErrMsg('Jumping to a symbol declaration is not supported')
+    return
+  endif
+
+  # interface DeclarationParams
+  #   interface TextDocumentPositionParams
+  GotoSymbolLoc(lspserver, 'textDocument/declaration', peek, cmdmods, count)
+enddef
+
+# Request: "textDocument/typeDefinition"
+# Param: TypeDefinitionParams
+def GotoTypeDef(lspserver: dict<any>, peek: bool, cmdmods: string, count: number)
+  # Check whether LSP server supports jumping to a type definition
+  if !lspserver.isTypeDefinitionProvider
+    util.ErrMsg('Jumping to a symbol type definition is not supported')
+    return
+  endif
+
+  # interface TypeDefinitionParams
+  #   interface TextDocumentPositionParams
+  GotoSymbolLoc(lspserver, 'textDocument/typeDefinition', peek, cmdmods, count)
+enddef
+
+# Request: "textDocument/implementation"
+# Param: ImplementationParams
+def GotoImplementation(lspserver: dict<any>, peek: bool, cmdmods: string, count: number)
+  # Check whether LSP server supports jumping to a implementation
+  if !lspserver.isImplementationProvider
+    util.ErrMsg('Jumping to a symbol implementation is not supported')
+    return
+  endif
+
+  # interface ImplementationParams
+  #   interface TextDocumentPositionParams
+  GotoSymbolLoc(lspserver, 'textDocument/implementation', peek, cmdmods, count)
+enddef
+
+# Request: "textDocument/switchSourceHeader"
+# Param: TextDocumentIdentifier
+# Clangd specific extension
+def SwitchSourceHeader(lspserver: dict<any>)
+  var param = {
+    uri: util.LspFileToUri(@%)
+  }
+  var reply = lspserver.rpc('textDocument/switchSourceHeader', param)
+  if reply->empty() || reply.result->empty()
+    util.WarnMsg('Source/Header file is not found')
+    return
+  endif
+
+  # process the 'textDocument/switchSourceHeader' reply from the LSP server
+  # Result: URI | null
+  var fname = util.LspUriToFile(reply.result)
+  # TODO: Add support for cmd modifiers
+  if (&modified && !&hidden) || &buftype != ''
+    # if the current buffer has unsaved changes and 'hidden' is not set,
+    # or if the current buffer is a special buffer, then ask to save changes
+    exe $'confirm edit {fname}'
+  else
+    exe $'edit {fname}'
+  endif
+enddef
+
+# get symbol signature help.
+# Request: "textDocument/signatureHelp"
+# Param: SignatureHelpParams
+def ShowSignature(lspserver: dict<any>, triggerKind_arg: number = 1, triggerChar: string = ''): void
+  # Check whether LSP server supports signature help
+  if !lspserver.isSignatureHelpProvider
+    util.ErrMsg('LSP server does not support signature help')
+    return
+  endif
+
+  # interface SignatureHelpParams
+  #   interface TextDocumentPositionParams
+  var params = lspserver.getTextDocPosition(false)
+  var reqctx: dict<number> = signature.SignatureRequestContextGet()
+  params.context = signature.GetSignatureHelpContext(lspserver,
+						     triggerKind_arg,
+						     triggerChar)
+  lspserver.rpc_a('textDocument/signatureHelp', params, (_, reply, error) => {
+		signature.SignatureHelp(lspserver, reply, error, reqctx)
+	})
+enddef
+
+# Send a file/document saved notification to the language server
+def DidSaveFile(lspserver: dict<any>, bnr: number): void
+  # Check whether the LSP server supports the didSave notification
+  if !lspserver.supportsDidSave
+    # LSP server doesn't support text document synchronization
+    return
+  endif
+
+  # Notification: 'textDocument/didSave'
+  # Params: DidSaveTextDocumentParams
+  var params: dict<any> = {textDocument: {uri: util.LspBufnrToUri(bnr)}}
+
+  var textDocumentSync = lspserver.caps.textDocumentSync
+  if textDocumentSync->type() == v:t_dict && textDocumentSync->has_key('save')
+    var save = textDocumentSync.save
+    if save->type() == v:t_dict && save->has_key('includeText') && save.includeText
+      params.text = BufferText(bnr)
+    endif
+  endif
+
+  lspserver.sendNotification('textDocument/didSave', params)
+enddef
+
+# get the hover information
+# Request: "textDocument/hover"
+# Param: HoverParams
+def ShowHoverInfo(lspserver: dict<any>, cmdmods: string): void
+  # Check whether LSP server supports getting hover information.
+  # caps->hoverProvider can be a "boolean" or "HoverOptions"
+  if !lspserver.isHoverProvider
+    return
+  endif
+
+  var reqctx = hover.HoverRequestContextGet(lspserver)
+  if hover.HoverShowCached(reqctx, lspserver, cmdmods)
+    return
+  endif
+
+  # interface HoverParams
+  #   interface TextDocumentPositionParams
+  var params = lspserver.getTextDocPosition(false)
+  lspserver.rpc_a('textDocument/hover', params, (_, reply, error) => {
+    hover.HoverReply(lspserver, reply, error, cmdmods, reqctx)
+  })
+enddef
+
+# Request: "textDocument/references"
+# Param: ReferenceParams
+def ShowReferences(lspserver: dict<any>, peek: bool): void
+  # Check whether LSP server supports getting reference information
+  if !lspserver.isReferencesProvider
+    util.ErrMsg('LSP server does not support showing references')
+    return
+  endif
+
+  # interface ReferenceParams
+  #   interface TextDocumentPositionParams
+  var param: dict<any>
+  param = lspserver.getTextDocPosition(true)
+  param.context = {includeDeclaration: true}
+  var reply = lspserver.rpc('textDocument/references', param)
+
+  # Result: Location[] | null
+  if reply->empty() || reply.result->empty()
+    util.WarnMsg('No references found')
+    return
+  endif
+
+  if lspserver.needOffsetEncoding
+    # Decode the position encoding in all the reference locations
+    reply.result->map((_, loc) => {
+      lspserver.decodeLocation(loc)
+      return loc
+    })
+  endif
+
+  symbol.ShowLocations(lspserver, reply.result, peek, 'Symbol References')
+enddef
+
+# send custom locations request
+def FindLocations(lspserver: dict<any>, peek: bool, method: string, args: dict<any>): void
+  var param: dict<any>
+  param = lspserver.getTextDocPosition(true)->extend(args)
+  var reply = lspserver.rpc(method, param)
+
+  # Result: Location[] | null
+  if reply->empty() || reply.result->empty()
+    util.WarnMsg('No location found')
+    return
+  endif
+
+  if lspserver.needOffsetEncoding
+    # Decode the position encoding in all the reference locations
+    reply.result->map((_, loc) => {
+      lspserver.decodeLocation(loc)
+      return loc
+    })
+  endif
+
+  symbol.ShowLocations(lspserver, reply.result, peek, 'Symbol Locations')
+enddef
+
+# send a custom request to the server
+# Name: name of the server
+# Request: any
+# Params: any
+def g:LspRequestCustom(name: string, msg: string, params: any): string
+  var lspserver: dict<any> = buf.CurbufGetServerByName(name)
+  if lspserver->empty()
+    return ''
+  endif
+
+  lspserver.rpc_a(msg, params, (_, reply, error) => WorkspaceExecuteReply(lspserver, reply, error))
+  return ''
+enddef
+
+# process the 'textDocument/documentHighlight' reply from the LSP server
+# Result: DocumentHighlight[] | null
+def DocHighlightReply(lspserver: dict<any>, docHighlightReply: any,
+                      docHighlightError: dict<any>, bnr: number,
+                      cmdmods: string): void
+  # Handle document highlight error
+  if !docHighlightError->empty()
+    if cmdmods !~ 'silent'
+      util.ErrMsg($'Document highlight failed: {docHighlightError.message}')
+    endif
+    return
+  endif
+
+  if docHighlightReply->empty()
+    if cmdmods !~ 'silent'
+      util.WarnMsg($'No highlight for the current position')
+    endif
+    return
+  endif
+
+  for docHL in docHighlightReply
+    lspserver.decodeRange(bnr, docHL.range)
+    var kind: number = docHL->get('kind', protocol.DocumentHighlightKindText)
+    var propName: string
+    if kind == protocol.DocumentHighlightKindRead
+      propName = 'LspReadRef'
+    elseif kind == protocol.DocumentHighlightKindWrite
+      propName = 'LspWriteRef'
+    else
+      # textual reference
+      propName = 'LspTextRef'
+    endif
+    try
+      var docHL_range = docHL.range
+      var docHL_start = docHL_range.start
+      var docHL_end = docHL_range.end
+      prop_add(docHL_start.line + 1,
+                  util.GetLineByteFromPos(bnr, docHL_start) + 1,
+                  {end_lnum: docHL_end.line + 1,
+                    end_col: util.GetLineByteFromPos(bnr, docHL_end) + 1,
+                    bufnr: bnr,
+                    type: propName})
+    catch /E966\|E964/ # Invalid lnum | Invalid col
+      # Highlight replies arrive asynchronously and the document might have
+      # been modified in the mean time.  As the reply is stale, ignore invalid
+      # line number and column number errors.
+    endtry
+  endfor
+enddef
+
+# Request: "textDocument/documentHighlight"
+# Param: DocumentHighlightParams
+def DocHighlight(lspserver: dict<any>, bnr: number, cmdmods: string): void
+  # Check whether LSP server supports getting highlight information
+  if !lspserver.isDocumentHighlightProvider
+    util.ErrMsg('LSP server does not support document highlight')
+    return
+  endif
+
+  # Send the pending buffer changes to the language server
+  bnr->listener_flush()
+
+  # interface DocumentHighlightParams
+  #   interface TextDocumentPositionParams
+  var params = lspserver.getTextDocPosition(false)
+  lspserver.rpc_a('textDocument/documentHighlight', params, (_, reply, error) => {
+    DocHighlightReply(lspserver, reply, error, bnr, cmdmods)
+  })
+enddef
+
+# Request: "textDocument/documentSymbol"
+# Param: DocumentSymbolParams
+def GetDocSymbols(lspserver: dict<any>, fname: string, showOutline: bool): void
+  # Check whether LSP server supports getting document symbol information
+  if !lspserver.isDocumentSymbolProvider
+    util.ErrMsg('LSP server does not support getting list of symbols')
+    return
+  endif
+
+  # interface DocumentSymbolParams
+  # interface TextDocumentIdentifier
+  var params = {textDocument: {uri: util.LspFileToUri(fname)}}
+  lspserver.rpc_a('textDocument/documentSymbol', params, (_, reply, error) => {
+    if showOutline
+      symbol.DocSymbolOutline(lspserver, reply, error, fname)
+    else
+      symbol.DocSymbolPopup(lspserver, reply, error, fname)
+    endif
+  })
+enddef
+
+# Request: "textDocument/formatting"
+# Param: DocumentFormattingParams
+# or
+# Request: "textDocument/rangeFormatting"
+# Param: DocumentRangeFormattingParams
+def TextDocFormat(lspserver: dict<any>, fname: string, rangeFormat: bool,
+				start_lnum: number, end_lnum: number)
+  # Check whether LSP server supports required formatting
+  if rangeFormat
+    if !lspserver.isDocumentRangeFormattingProvider
+      util.ErrMsg('LSP server does not support range formatting')
+      return
+    endif
+  elseif !lspserver.isDocumentFormattingProvider
+    util.ErrMsg('LSP server does not support formatting documents')
+    return
+  endif
+
+  var cmd: string
+  if rangeFormat
+    cmd = 'textDocument/rangeFormatting'
+  else
+    cmd = 'textDocument/formatting'
+  endif
+
+  # interface DocumentFormattingParams
+  #   interface TextDocumentIdentifier
+  #   interface FormattingOptions
+  var fmtopts: dict<any> = {
+    tabSize: shiftwidth(),
+    insertSpaces: &expandtab ? true : false,
+  }
+  var param = {
+    textDocument: {
+      uri: util.LspFileToUri(fname)
+    },
+    options: fmtopts
+  }
+
+  var bnr: number = fname->bufnr()
+
+  if rangeFormat
+    var r: dict<dict<number>> = {
+	start: {line: start_lnum - 1, character: 0},
+	end: {line: end_lnum - 1, character: charcol([end_lnum, '$']) - 1}}
+    lspserver.encodeRange(bnr, r)
+    param.range = r
+  endif
+
+  var reply = lspserver.rpc(cmd, param)
+
+  # result: TextEdit[] | null
+
+  if reply->empty() || reply.result->empty()
+    # nothing to format
+    return
+  endif
+
+  if bnr == -1
+    # file is already removed
+    return
+  endif
+
+  if lspserver.needOffsetEncoding
+    # Decode the position encoding in all the reference locations
+    reply.result->map((_, textEdit) => {
+      lspserver.decodeRange(bnr, textEdit.range)
+      return textEdit
+    })
+  endif
+
+  # interface TextEdit
+  # Apply each of the text edit operations
+  textedit.ApplyTextEdits(bnr, reply.result)
+enddef
+
+# Adjust 'origPos' (a decoded, 0-indexed {line, character} position) to
+# account for having applied 'edits' (also decoded, in original-document
+# order/coordinates) to the buffer.
+#
+# textedit.ApplyTextEdits() does not track cursor movement.  On-type
+# formatting edits routinely insert text immediately before the just-typed
+# character (e.g. indenting the line the server just reformatted), so the
+# cursor needs to be moved past that inserted text to keep typing naturally.
+# Only edits that end at or before 'origPos' are relevant here: on-type
+# formatting edits are always local to the trigger point.
+def AdjustPositionForOnTypeEdits(origPos: dict<number>,
+				 edits: list<dict<any>>): dict<number>
+  var sorted = edits->copy()->sort((a, b) => {
+    if a.range.start.line != b.range.start.line
+      return a.range.start.line - b.range.start.line
+    endif
+    return a.range.start.character - b.range.start.character
+  })
+
+  var lineDelta = 0
+  var character = origPos.character
+  var adjustedOnOrigLine = false
+
+  for e in sorted
+    var s = e.range.start
+    var en = e.range.end
+    if en.line > origPos.line
+	|| (en.line == origPos.line && en.character > origPos.character)
+      # This edit is at or after 'origPos'; on-type formatting edits are
+      # expected to precede the just-typed character.
+      continue
+    endif
+
+    var newTextLines = e.newText->split("\n", true)
+    lineDelta += (newTextLines->len() - 1) - (en.line - s.line)
+
+    if en.line == origPos.line
+      if newTextLines->len() == 1
+	character = character - en.character + s.character +
+					newTextLines[0]->strcharlen()
+      else
+	character = character - en.character + newTextLines[-1]->strcharlen()
+      endif
+      adjustedOnOrigLine = true
+    endif
+  endfor
+
+  return {line: origPos.line + lineDelta,
+	  character: adjustedOnOrigLine ? character : origPos.character}
+enddef
+
+# Request on-type formatting edits for the character just typed and apply
+# them to the buffer, then place the cursor after any inserted text so that
+# typing can continue naturally.
+# Request: "textDocument/onTypeFormatting"
+# Param: DocumentOnTypeFormattingParams
+def TextDocOnTypeFormat(lspserver: dict<any>, ch: string)
+  if !lspserver.isDocumentOnTypeFormattingProvider
+    util.ErrMsg('LSP server does not support on-type formatting')
+    return
+  endif
+
+  var bnr: number = @%->bufnr()
+  if bnr == -1
+    return
+  endif
+
+  # Send the pending buffer changes to the language server
+  bnr->listener_flush()
+
+  # interface DocumentOnTypeFormattingParams
+  #   interface TextDocumentIdentifier
+  #   interface Position
+  #   ch: string
+  #   interface FormattingOptions
+  var param = lspserver.getTextDocPosition(false)
+  param.ch = ch
+  param.options = {
+    tabSize: shiftwidth(),
+    insertSpaces: &expandtab ? true : false,
+  }
+  var origPos = param.position->copy()
+
+  var reply = lspserver.rpc('textDocument/onTypeFormatting', param)
+
+  # result: TextEdit[] | null
+  if reply->empty() || reply.result->empty()
+    return
+  endif
+
+  if lspserver.needOffsetEncoding
+    reply.result->map((_, textEdit) => {
+      lspserver.decodeRange(bnr, textEdit.range)
+      return textEdit
+    })
+    lspserver.decodePosition(bnr, origPos)
+  endif
+
+  var newPos = AdjustPositionForOnTypeEdits(origPos, reply.result)
+
+  # interface TextEdit
+  # Apply each of the text edit operations
+  textedit.ApplyTextEdits(bnr, reply.result)
+
+  var byteIdx = util.GetLineByteFromPos(bnr, newPos)
+  cursor(newPos.line + 1, byteIdx + 1)
+enddef
+
+def DecodeCallHierarchyItem(lspserver: dict<any>, item: dict<any>)
+  if !lspserver.needOffsetEncoding
+    return
+  endif
+
+  var bnr = util.LspUriToBufnr(item.uri)
+  lspserver.decodeRange(bnr, item.range)
+  lspserver.decodeRange(bnr, item.selectionRange)
+enddef
+
+def EncodeCallHierarchyItem(lspserver: dict<any>, item: dict<any>)
+  if !lspserver.needOffsetEncoding
+    return
+  endif
+
+  var bnr = util.LspUriToBufnr(item.uri)
+  lspserver.encodeRange(bnr, item.range)
+  lspserver.encodeRange(bnr, item.selectionRange)
+enddef
+
+# Request: "textDocument/prepareCallHierarchy"
+def PrepareCallHierarchy(lspserver: dict<any>): dict<any>
+  # interface CallHierarchyPrepareParams
+  #   interface TextDocumentPositionParams
+  var param: dict<any>
+  param = lspserver.getTextDocPosition(false)
+  var reply = lspserver.rpc('textDocument/prepareCallHierarchy', param)
+  if reply->empty() || reply.result->empty()
+    return {}
+  endif
+
+  # Result: CallHierarchyItem[] | null
+  var choice: number = 1
+  if reply.result->len() > 1
+    var items: list<string> = ['Select a Call Hierarchy Item:']
+    for i in reply.result->len()->range()
+      items->add(printf("%d. %s", i + 1, reply.result[i].name))
+    endfor
+    choice = items->inputlist()
+    if choice < 1 || choice >= items->len()
+      return {}
+    endif
+  endif
+
+  var prepareItem: dict<any> = reply.result[choice - 1]
+  DecodeCallHierarchyItem(lspserver, prepareItem)
+
+  return prepareItem
+enddef
+
+# Request: "callHierarchy/incomingCalls"
+def IncomingCalls(lspserver: dict<any>, fname: string)
+  # Check whether LSP server supports call hierarchy
+  if !lspserver.isCallHierarchyProvider
+    util.ErrMsg('LSP server does not support call hierarchy')
+    return
+  endif
+
+  callhier.IncomingCalls(lspserver)
+enddef
+
+def GetIncomingCalls(lspserver: dict<any>, item_arg: dict<any>): any
+  # Request: "callHierarchy/incomingCalls"
+  # Param: CallHierarchyIncomingCallsParams
+  var requestItem = item_arg->deepcopy()
+  EncodeCallHierarchyItem(lspserver, requestItem)
+
+  var param = {
+    item: requestItem
+  }
+  var reply = lspserver.rpc('callHierarchy/incomingCalls', param)
+  if reply->empty()
+    return null
+  endif
+
+  if lspserver.needOffsetEncoding
+    # Decode the position encoding in all the incoming call locations
+    reply.result->map((_, hierItem) => {
+      var bnr = util.LspUriToBufnr(hierItem.from.uri)
+      lspserver.decodeRange(bnr, hierItem.from.range)
+      lspserver.decodeRange(bnr, hierItem.from.selectionRange)
+      return hierItem
+    })
+  endif
+
+  return reply.result
+enddef
+
+# Request: "callHierarchy/outgoingCalls"
+def OutgoingCalls(lspserver: dict<any>, fname: string)
+  # Check whether LSP server supports call hierarchy
+  if !lspserver.isCallHierarchyProvider
+    util.ErrMsg('LSP server does not support call hierarchy')
+    return
+  endif
+
+  callhier.OutgoingCalls(lspserver)
+enddef
+
+def GetOutgoingCalls(lspserver: dict<any>, item_arg: dict<any>): any
+  # Request: "callHierarchy/outgoingCalls"
+  # Param: CallHierarchyOutgoingCallsParams
+  var requestItem = item_arg->deepcopy()
+  EncodeCallHierarchyItem(lspserver, requestItem)
+
+  var param = {
+    item: requestItem
+  }
+  var reply = lspserver.rpc('callHierarchy/outgoingCalls', param)
+  if reply->empty()
+    return null
+  endif
+
+  if lspserver.needOffsetEncoding
+    # Decode the position encoding in all the outgoing call locations
+    reply.result->map((_, hierItem) => {
+      var bnr = util.LspUriToBufnr(hierItem.to.uri)
+      lspserver.decodeRange(bnr, hierItem.to.range)
+      lspserver.decodeRange(bnr, hierItem.to.selectionRange)
+      return hierItem
+    })
+  endif
+
+  return reply.result
+enddef
+
+# Request: "textDocument/inlayHint"
+# Inlay hints.
+def InlayHintsShow(lspserver: dict<any>, bnr: number)
+  # Check whether LSP server supports type hierarchy
+  if !lspserver.isInlayHintProvider && !lspserver.isClangdInlayHintsProvider
+    util.ErrMsg('LSP server does not support inlay hint')
+    return
+  endif
+
+  # Send the pending buffer changes to the language server
+  bnr->listener_flush()
+
+  var binfo = bnr->getbufinfo()
+  if binfo->empty()
+    return
+  endif
+  var lastlnum = binfo[0].linecount
+  var lastline = bnr->getbufline('$')
+  var lastcol = 1
+  if !lastline->empty() && !lastline[0]->empty()
+    lastcol = lastline[0]->strchars()
+  endif
+  var param = {
+      textDocument: {uri: util.LspBufnrToUri(bnr)},
+      range:
+      {
+	start: {line: 0, character: 0},
+	end: {line: lastlnum - 1, character: lastcol - 1}
+      }
+  }
+
+  lspserver.encodeRange(bnr, param.range)
+
+  var msg: string
+  if lspserver.isClangdInlayHintsProvider
+    # clangd-style inlay hints
+    msg = 'clangd/inlayHints'
+  else
+    msg = 'textDocument/inlayHint'
+  endif
+  var reply = lspserver.rpc_a(msg, param, (_, reply, error) => {
+    inlayhints.InlayHintsReply(lspserver, reply, error, bnr)
+  })
+enddef
+
+# Recursively decode the parent/children type hierarchy items.
+def DecodeTypeHierarchy(lspserver: dict<any>, isSuper: bool, typeHier: dict<any>)
+  if !lspserver.needOffsetEncoding
+    return
+  endif
+  var bnr = util.LspUriToBufnr(typeHier.uri)
+  lspserver.decodeRange(bnr, typeHier.range)
+  lspserver.decodeRange(bnr, typeHier.selectionRange)
+  var subType: list<dict<any>>
+  if isSuper
+    subType = typeHier->get('parents', [])
+  else
+    subType = typeHier->get('children', [])
+  endif
+  if !subType->empty()
+    # Decode the position encoding in all the type hierarchy items
+    subType->map((_, typeHierItem) => {
+        DecodeTypeHierarchy(lspserver, isSuper, typeHierItem)
+	return typeHierItem
+      })
+  endif
+enddef
+
+# Recursively get all the parent/children type items of "typeHierItem" from
+# the language server.
+def GetTypeHierarchy(lspserver: dict<any>, typeHierItem: dict<any>, isSuper: bool)
+  var msg = ''
+  if isSuper
+    msg = 'typeHierarchy/supertypes'
+  else
+    msg = 'typeHierarchy/subtypes'
+  endif
+
+  var param: dict<any> = {}
+  param.item = typeHierItem
+
+  var reply = lspserver.rpc(msg, param)
+  if reply->empty() || reply.result->empty() || reply.result->type() != v:t_list
+    return
+  endif
+
+  if isSuper
+    typeHierItem.parents = reply.result
+  else
+    typeHierItem.children = reply.result
+  endif
+
+  for item in reply.result
+    GetTypeHierarchy(lspserver, item, isSuper)
+  endfor
+enddef
+
+# Request: "textDocument/typehierarchy"
+# Support the clangd version of type hierarchy retrieval method.
+# The method described in the LSP 3.17.0 standard is not supported as clangd
+# doesn't support that method.
+def TypeHierarchy(lspserver: dict<any>, direction: number)
+  # Check whether LSP server supports type hierarchy
+  if !lspserver.isTypeHierarchyProvider
+    util.ErrMsg('LSP server does not support type hierarchy')
+    return
+  endif
+
+  # interface TypeHierarchyPrepareParams
+  #   interface TextDocumentPositionParams
+  var param: dict<any>
+  param = lspserver.getTextDocPosition(false)
+  var reply = lspserver.rpc('textDocument/prepareTypeHierarchy', param)
+  if reply->empty() || reply.result->empty()
+    util.WarnMsg('No type hierarchy available')
+    return
+  endif
+
+  if reply.result->type() != v:t_list
+    util.ErrMsg('prepareTypeHierarchy response from the language server is not a List')
+    return
+  endif
+
+  var typeHierItem = reply.result[0]
+  var isSuper: bool = (direction == 1)
+
+  GetTypeHierarchy(lspserver, typeHierItem, isSuper)
+
+  if isSuper && !typeHierItem->has_key('parents')
+    util.WarnMsg('No supertype hierarchy available')
+    return
+  elseif !isSuper && !typeHierItem->has_key('children')
+    util.WarnMsg('No subtype hierarchy available')
+    return
+  endif
+
+  DecodeTypeHierarchy(lspserver, isSuper, typeHierItem)
+
+  typehier.ShowTypeHierarchy(lspserver, isSuper, typeHierItem)
+enddef
+
+# Decode the ranges in "WorkspaceEdit"
+def DecodeWorkspaceEdit(lspserver: dict<any>, workspaceEdit: dict<any>)
+  if !lspserver.needOffsetEncoding
+    return
+  endif
+  if workspaceEdit->has_key('changes')
+    for [uri, changes] in workspaceEdit.changes->items()
+      var bnr: number = util.LspUriToBufnr(uri)
+      if bnr <= 0
+	continue
+      endif
+      # Decode the position encoding in all the text edit locations
+      changes->map((_, textEdit) => {
+	lspserver.decodeRange(bnr, textEdit.range)
+	return textEdit
+      })
+    endfor
+  endif
+
+  if workspaceEdit->has_key('documentChanges')
+    for change in workspaceEdit.documentChanges
+      if !change->has_key('kind')
+	var bnr: number = util.LspUriToBufnr(change.textDocument.uri)
+	if bnr <= 0
+	  continue
+	endif
+	# Decode the position encoding in all the text edit locations
+	change.edits->map((_, textEdit) => {
+	  lspserver.decodeRange(bnr, textEdit.range)
+	  return textEdit
+	})
+      endif
+    endfor
+  endif
+enddef
+
+# Request: "textDocument/rename"
+# Param: RenameParams
+def RenameSymbol(lspserver: dict<any>, newName: string)
+  # Check whether LSP server supports rename operation
+  if !lspserver.isRenameProvider
+    util.ErrMsg('LSP server does not support rename operation')
+    return
+  endif
+
+  # interface RenameParams
+  #   interface TextDocumentPositionParams
+  var param: dict<any> = {}
+  param = lspserver.getTextDocPosition(true)
+  param.newName = newName
+
+  var reply = lspserver.rpc('textDocument/rename', param)
+
+  # Result: WorkspaceEdit | null
+  if reply->empty() || reply.result->empty()
+    # nothing to rename
+    return
+  endif
+
+  # result: WorkspaceEdit
+  DecodeWorkspaceEdit(lspserver, reply.result)
+  textedit.ApplyWorkspaceEdit(reply.result)
+enddef
+
+# Decode the range in "CodeAction"
+def DecodeCodeAction(lspserver: dict<any>, actionList: list<dict<any>>)
+  if !lspserver.needOffsetEncoding
+    return
+  endif
+  actionList->map((_, act) => {
+      if !act->has_key('disabled') && act->has_key('edit')
+	DecodeWorkspaceEdit(lspserver, act.edit)
+      endif
+      return act
+    })
+enddef
+
+# Parse a code action query for request-side filtering.
+#
+# Supported query syntax:
+#   only:<kind[,kind...]>
+#   kind:<kind[,kind...]>
+# Optional selector:
+#   ...#<selector>
+#
+# Example:
+#   only:quickfix#1
+def ParseCodeActionQuery(query: string): dict<any>
+  var q = query->trim()
+  var result = {only: [], query: query}
+
+  if q !~? '^\%(only\|kind\):'
+    return result
+  endif
+
+  var payload = q->substitute('^\c\%(only\|kind\):', '', '')
+  var selector = ''
+  var hashIdx = payload->stridx('#')
+  if hashIdx >= 0
+    selector = payload[hashIdx + 1 : ]
+    payload = payload[0 : hashIdx - 1]
+  endif
+
+  var onlyKinds = payload->split(',')
+  onlyKinds->map((_, kind) => kind->trim())
+  onlyKinds->filter((_, kind) => kind != '')
+  if onlyKinds->empty()
+    return result
+  endif
+
+  for kind in onlyKinds
+    if kind !~ '^[A-Za-z][A-Za-z0-9_.-]*$'
+      return result
+    endif
+  endfor
+
+  result.only = onlyKinds
+  result.query = selector
+  return result
+enddef
+
+def GetCodeActionParams(lspserver: dict<any>, fname_arg: string, line1: number,
+			line2: number, query: string): dict<any>
+  # Keep request construction in one place so sync/async code action paths
+  # stay behaviorally identical.
+  var params: dict<any> = {}
+  var fname: string = fname_arg->fnamemodify(':p')
+  var bnr: number = fname_arg->bufnr()
+  var r: dict<dict<number>> = {
+    start: {
+      line: line1 - 1,
+      character: line1 == line2
+	? util.GetCharIdxWithCompChar(getline('.'), charcol('.') - 1)
+	: 0
+    },
+    end: {
+      line: line2 - 1,
+      character: util.GetCharIdxWithCompChar(getline(line2), charcol([line2, '$']) - 1)
+    }
+  }
+  lspserver.encodeRange(bnr, r)
+  params->extend({textDocument: {uri: util.LspFileToUri(fname)}, range: r})
+
+  # Diagnostics are scoped per-server so each provider gets context that
+  # matches its own diagnostic namespace and offset encoding.
+  var d: list<dict<any>> = []
+  var needOffsetEncoding = lspserver.needOffsetEncoding
+  for lnum in range(line1, line2)
+    var diagsInfo: list<dict<any>> = diag.GetDiagsByLine(bnr, lnum, lspserver)->deepcopy()
+    if needOffsetEncoding
+      diagsInfo->map((_, di) => {
+	  lspserver.encodeRange(bnr, di.range)
+	  return di
+	})
+    endif
+    d->extend(diagsInfo)
+  endfor
+  params->extend({context: {diagnostics: d, triggerKind: 1}})
+
+  var queryInfo = ParseCodeActionQuery(query)
+  if !queryInfo.only->empty()
+    params.context.only = queryInfo.only
+  endif
+
+  # Return both params and post-filter selector (text after '#') used by UI.
+  return {
+    params: params,
+    selectorQuery: queryInfo.query
+  }
+enddef
+
+# Request: "textDocument/codeAction"
+# Param: CodeActionParams
+def CodeAction(lspserver: dict<any>, fname_arg: string, line1: number,
+		line2: number, query: string)
+  # Check whether LSP server supports code action operation
+  if !lspserver.isCodeActionProvider
+    util.ErrMsg('LSP server does not support code action operation')
+    return
+  endif
+
+  var reqInfo = GetCodeActionParams(lspserver, fname_arg, line1, line2, query)
+  var params = reqInfo.params
+
+  var reply = lspserver.rpc('textDocument/codeAction', params)
+
+  # Result: (Command | CodeAction)[] | null
+  if reply->empty() || reply.result->empty()
+    # no action can be performed
+    util.WarnMsg('No code action is available')
+    return
+  endif
+
+  DecodeCodeAction(lspserver, reply.result)
+
+  codeaction.ApplyCodeAction(lspserver, reply.result, reqInfo.selectorQuery)
+enddef
+
+def CodeActionAsync(lspserver: dict<any>, fname_arg: string, line1: number,
+		    line2: number, query: string, Cbfunc: func)
+  # Mirror sync semantics for unsupported providers: callback still fires so
+  # fan-out aggregators can deterministically count completions.
+  if !lspserver.isCodeActionProvider
+    Cbfunc(lspserver, [], query, {})
+    return
+  endif
+
+  var reqInfo = GetCodeActionParams(lspserver, fname_arg, line1, line2, query)
+  var params = reqInfo.params
+
+  var reqid = lspserver.rpc_a('textDocument/codeAction', params,
+	(_, result, rpcError) => {
+	  var actionList: list<dict<any>> = []
+    # Decode edits here so downstream UI/execution uses buffer coordinates.
+	  if rpcError->empty() && result->type() == v:t_list
+	    actionList = result
+	    if !actionList->empty()
+	      DecodeCodeAction(lspserver, actionList)
+	    endif
+	  endif
+
+	  Cbfunc(lspserver, actionList, reqInfo.selectorQuery, rpcError)
+	})
+
+  if reqid < 0
+    # Normalize send failures into callback error flow for one-path handling.
+    Cbfunc(lspserver, [], reqInfo.selectorQuery, {
+	code: -32603,
+	message: 'Failed to send code action request'
+	})
+  endif
+enddef
+
+# Request: "textDocument/codeLens"
+# Param: CodeLensParams
+def CodeLens(lspserver: dict<any>, fname: string)
+  # Check whether LSP server supports code lens operation
+  if !lspserver.isCodeLensProvider
+    util.ErrMsg('LSP server does not support code lens operation')
+    return
+  endif
+
+  var params = {textDocument: {uri: util.LspFileToUri(fname)}}
+  var reply = lspserver.rpc('textDocument/codeLens', params)
+  if reply->empty() || reply.result->empty()
+    util.WarnMsg($'No code lens actions found for the current file')
+    return
+  endif
+
+  var bnr = fname->bufnr()
+
+  # Decode the position encoding in all the code lens items
+  if lspserver.needOffsetEncoding
+    reply.result->map((_, codeLensItem) => {
+      lspserver.decodeRange(bnr, codeLensItem.range)
+      return codeLensItem
+    })
+  endif
+
+  codelens.ProcessCodeLens(lspserver, bnr, reply.result)
+enddef
+
+#
+# Request: "codeAction/resolve"
+# Param: CodeAction
+def ResolveCodeAction(lspserver: dict<any>,
+		      codeAction: dict<any>): dict<any>
+  if !lspserver.isCodeActionResolveProvider
+    return {}
+  endif
+
+  var reply = lspserver.rpc('codeAction/resolve', codeAction)
+  if reply->empty()
+    return {}
+  endif
+
+  var codeActionItem: dict<any> = reply.result
+
+  return codeActionItem
+enddef
+
+# Request: "codeLens/resolve"
+# Param: CodeLens
+def ResolveCodeLens(lspserver: dict<any>, bnr: number,
+		    codeLens: dict<any>): dict<any>
+  if !lspserver.isCodeLensResolveProvider
+    return {}
+  endif
+
+  if lspserver.needOffsetEncoding
+    lspserver.encodeRange(bnr, codeLens.range)
+  endif
+
+  var reply = lspserver.rpc('codeLens/resolve', codeLens)
+  if reply->empty()
+    return {}
+  endif
+
+  var codeLensItem: dict<any> = reply.result
+
+  # Decode the position encoding in the code lens item
+  if lspserver.needOffsetEncoding
+    lspserver.decodeRange(bnr, codeLensItem.range)
+  endif
+
+  return codeLensItem
+enddef
+
+# List project-wide symbols matching query string
+# Request: "workspace/symbol"
+# Param: WorkspaceSymbolParams
+def WorkspaceQuerySymbols(lspserver: dict<any>, query: string, firstCall: bool, cmdmods: string = '')
+  # Check whether the LSP server supports listing workspace symbols
+  if !lspserver.isWorkspaceSymbolProvider
+    util.ErrMsg('LSP server does not support listing workspace symbols')
+    return
+  endif
+
+  # Param: WorkspaceSymbolParams
+  var param = {
+    query: query
+  }
+  var reply = lspserver.rpc('workspace/symbol', param)
+  if reply->empty() || reply.result->empty()
+    util.WarnMsg($'Symbol "{query}" is not found')
+    return
+  endif
+
+  var symInfo: list<dict<any>> = reply.result
+
+  if firstCall && symInfo->len() == 1
+    # If there is only one symbol, then jump to the symbol location
+    var symLoc: dict<any> = symInfo[0]->get('location', {})
+    if !symLoc->empty()
+      # Decode the position encoding in the symbol location
+      if lspserver.needOffsetEncoding
+	lspserver.decodeLocation(symLoc)
+      endif
+      symbol.GotoSymbol(lspserver, symLoc, false, cmdmods)
+    endif
+  else
+    # Note: decoding position encoding delayed until jumping to location
+    symbol.WorkspaceSymbolPopup(lspserver, query, symInfo, cmdmods)
+  endif
+enddef
+
+# Return the LSP WorkspaceFolder interface for the directory "dirName"
+def GetWorkspaceFolder(dirName: string): dict<any>
+  var normalizedDir = dirName->fnamemodify(':p')
+  return {
+    name: normalizedDir->fnamemodify(':t'),
+    uri: util.LspFileToUri(normalizedDir)
+  }
+enddef
+
+# Add a workspace folder to the language server.
+def AddWorkspaceFolder(lspserver: dict<any>, dirName_arg: string): void
+  var dirName = dirName_arg->fnamemodify(':p')
+
+  var caps = lspserver.caps
+  if !caps->has_key('workspace')
+    util.ErrMsg('LSP server does not support workspace folders')
+    return
+  endif
+  var workspace = caps.workspace
+  if !workspace->has_key('workspaceFolders')
+    util.ErrMsg('LSP server does not support workspace folders')
+    return
+  endif
+  var workspaceFolders = workspace.workspaceFolders
+  if !workspaceFolders->has_key('supported') || !workspaceFolders.supported
+    util.ErrMsg('LSP server does not support workspace folders')
+    return
+  endif
+
+  if lspserver.workspaceFolders->index(dirName) != -1
+    util.ErrMsg($'{dirName} is already part of this workspace')
+    return
+  endif
+
+  # Notification: 'workspace/didChangeWorkspaceFolders'
+  # Params: DidChangeWorkspaceFoldersParams
+  var params = {event: {added: [GetWorkspaceFolder(dirName)], removed: []}}
+  lspserver.sendNotification('workspace/didChangeWorkspaceFolders', params)
+
+  lspserver.workspaceFolders->add(dirName)
+enddef
+
+# Remove a workspace folder from the language server.
+def RemoveWorkspaceFolder(lspserver: dict<any>, dirName_arg: string): void
+  var dirName = dirName_arg->fnamemodify(':p')
+
+  var caps = lspserver.caps
+  if !caps->has_key('workspace')
+    util.ErrMsg('LSP server does not support workspace folders')
+    return
+  endif
+  var workspace = caps.workspace
+  if !workspace->has_key('workspaceFolders')
+    util.ErrMsg('LSP server does not support workspace folders')
+    return
+  endif
+  var workspaceFolders = workspace.workspaceFolders
+  if !workspaceFolders->has_key('supported') || !workspaceFolders.supported
+    util.ErrMsg('LSP server does not support workspace folders')
+    return
+  endif
+
+  var idx: number = lspserver.workspaceFolders->index(dirName)
+  if idx == -1
+    util.ErrMsg($'{dirName} is not currently part of this workspace')
+    return
+  endif
+
+  # Notification: "workspace/didChangeWorkspaceFolders"
+  # Param: DidChangeWorkspaceFoldersParams
+  var params = {event: {added: [], removed: [GetWorkspaceFolder(dirName)]}}
+  lspserver.sendNotification('workspace/didChangeWorkspaceFolders', params)
+
+  lspserver.workspaceFolders->remove(idx)
+enddef
+
+def DecodeSelectionRange(lspserver: dict<any>, bnr: number, selRange: dict<any>)
+  lspserver.decodeRange(bnr, selRange.range)
+  if selRange->has_key('parent')
+    DecodeSelectionRange(lspserver, bnr, selRange.parent)
+  endif
+enddef
+
+# select the text around the current cursor location
+# Request: "textDocument/selectionRange"
+# Param: SelectionRangeParams
+def SelectionRange(lspserver: dict<any>, fname: string)
+  # Check whether LSP server supports selection ranges
+  if !lspserver.isSelectionRangeProvider
+    util.ErrMsg('LSP server does not support selection ranges')
+    return
+  endif
+
+  # clear the previous selection reply
+  lspserver.selection = {}
+
+  # interface SelectionRangeParams
+  # interface TextDocumentIdentifier
+  var param = {
+    textDocument: {
+      uri: util.LspFileToUri(fname)
+    },
+    positions: [lspserver.getPosition(false)]
+  }
+  var reply = lspserver.rpc('textDocument/selectionRange', param)
+
+  if reply->empty() || reply.result->empty()
+    return
+  endif
+
+  # Decode the position encoding in all the selection range items
+  if lspserver.needOffsetEncoding
+    var bnr = fname->bufnr()
+    reply.result->map((_, selItem) => {
+	DecodeSelectionRange(lspserver, bnr, selItem)
+	return selItem
+      })
+  endif
+
+  selection.SelectionStart(lspserver, reply.result)
+enddef
+
+# Expand the previous selection or start a new one
+def SelectionExpand(lspserver: dict<any>)
+  # Check whether LSP server supports selection ranges
+  if !lspserver.isSelectionRangeProvider
+    util.ErrMsg('LSP server does not support selection ranges')
+    return
+  endif
+
+  selection.SelectionModify(lspserver, true)
+enddef
+
+# Shrink the previous selection or start a new one
+def SelectionShrink(lspserver: dict<any>)
+  # Check whether LSP server supports selection ranges
+  if !lspserver.isSelectionRangeProvider
+    util.ErrMsg('LSP server does not support selection ranges')
+    return
+  endif
+
+  selection.SelectionModify(lspserver, false)
+enddef
+
+# fold the entire document
+# Request: "textDocument/foldingRange"
+# Param: FoldingRangeParams
+def FoldRange(lspserver: dict<any>, fname: string)
+  # Check whether LSP server supports fold ranges
+  if !lspserver.isFoldingRangeProvider
+    util.ErrMsg('LSP server does not support folding')
+    return
+  endif
+
+  # Remove all the current folds
+  :normal! zE
+
+  # interface FoldingRangeParams
+  # interface TextDocumentIdentifier
+  var params = {textDocument: {uri: util.LspFileToUri(fname)}}
+  var reply = lspserver.rpc('textDocument/foldingRange', params)
+  if reply->empty() || reply.result->empty()
+    return
+  endif
+
+  # result: FoldingRange[]
+  var end_lnum: number
+  for foldRange in reply.result
+    var start_lnum = foldRange.startLine + 1
+    end_lnum = foldRange.endLine + 1
+
+    if end_lnum < start_lnum
+      end_lnum = start_lnum
+    endif
+    exe $':{start_lnum}, {end_lnum}fold'
+    # Open all the folds, otherwise the subsequently created folds are not
+    # correct.
+    :silent! foldopen!
+  endfor
+
+  if &foldcolumn == 0
+    :setlocal foldcolumn=2
+  endif
+enddef
+
+# process the 'workspace/executeCommand' reply from the LSP server
+# Result: any | null
+def WorkspaceExecuteReply(lspserver: dict<any>, execReply: any,
+                          execError: dict<any> = {})
+  # Handle workspace execute command error
+  if !execError->empty()
+    lspserver.traceLog($'Execute command failed: {execError.message}')
+    return
+  endif
+
+  # Nothing to do for the reply
+enddef
+
+# Request the LSP server to execute a command
+# Request: workspace/executeCommand
+# Params: ExecuteCommandParams
+def ExecuteCommand(lspserver: dict<any>, cmd: dict<any>)
+  # Need to check for lspserver.caps.executeCommandProvider?
+  var params: dict<any> = {}
+  params.command = cmd->get('command', '')
+  if params.command->empty()
+    # No specific command to execute received from the server
+    return
+  endif
+  if cmd->has_key('arguments')
+    params.arguments = cmd.arguments
+  endif
+
+  lspserver.rpc_a('workspace/executeCommand', params, (_, reply, error) => WorkspaceExecuteReply(lspserver, reply, error))
+enddef
+
+# Display the LSP server capabilities (received during the initialization
+# stage).
+def GetCapabilities(lspserver: dict<any>): list<string>
+  var l = []
+  var heading = $"'{lspserver.name}' Language Server Capabilities"
+  var underlines = repeat('=', heading->len())
+  l->extend([heading, underlines])
+  for k in lspserver.caps->keys()->sort()
+    l->add($'{k}: {lspserver.caps[k]->string()}')
+  endfor
+  return l
+enddef
+
+# Display the LSP server initialize request and result
+def GetInitializeRequest(lspserver: dict<any>): list<string>
+  var l = []
+  var heading = $"'{lspserver.path}' Language Server Initialize Request"
+  var underlines = repeat('=', heading->len())
+  l->extend([heading, underlines])
+  if lspserver->has_key('rpcInitializeRequest')
+    for k in lspserver.rpcInitializeRequest->keys()->sort()
+      l->add($'{k}: {lspserver.rpcInitializeRequest[k]->string()}')
+    endfor
+  endif
+  return l
+enddef
+
+# Store a log or trace message received from the language server.
+def AddMessage(lspserver: dict<any>, msgType: string, newMsg: string)
+  # A single message may contain multiple lines separated by newline
+  if newMsg == ''
+    return
+  endif
+  var msgs = newMsg->split("\n")
+  lspserver.messages->add($'{strftime("%m/%d/%y %T")}: [{msgType}]: {msgs[0]}')
+  lspserver.messages->extend(msgs[1 : ])
+  # Keep only the last 500 messages to reduce the memory usage
+  if lspserver.messages->len() >= 600
+    lspserver.messages = lspserver.messages[-500 : ]
+  endif
+enddef
+
+# Display the log messages received from the LSP server (window/logMessage)
+def GetMessages(lspserver: dict<any>): list<string>
+  if lspserver.messages->empty()
+    return [$'No messages received from "{lspserver.name}" server']
+  endif
+
+  var l = []
+  var heading = $"'{lspserver.path}' Language Server Messages"
+  var underlines = repeat('=', heading->len())
+  l->extend([heading, underlines])
+  l->extend(lspserver.messages)
+  return l
+enddef
+
+# Send a 'textDocument/definition' request to the LSP server to get the
+# location where the symbol under the cursor is defined and return a list of
+# Dicts in a format accepted by the 'tagfunc' option.
+# Returns null if the LSP server doesn't support getting the location of a
+# symbol definition or the symbol is not defined.
+def TagFunc(lspserver: dict<any>, pat: string, flags: string, info: dict<any>): any
+  var taglocations: list<dict<any>> = []
+
+  # For explicit tag lookups (for example: :tag Foo), use workspace/symbol.
+  # The definition request uses only the cursor position and may return the
+  # wrong symbol for these lookups.
+  if pat != '' && pat != expand('<cword>')
+    if !lspserver.isWorkspaceSymbolProvider
+      return null
+    endif
+
+    var wsReply = lspserver.rpc('workspace/symbol', {query: pat}, {handleError: false})
+    if wsReply->empty() || wsReply.result->empty()
+      return null
+    endif
+
+    for sym in wsReply.result
+      if !sym->has_key('location') || !sym.location->has_key('range')
+	continue
+      endif
+      if sym->get('name', '') != pat
+	continue
+      endif
+      if sym->has_key('kind')
+	sym.kind = completion.LspCompleteItemKindChar(sym.kind)
+      endif
+      taglocations->add(sym.location)
+    endfor
+
+    if taglocations->empty()
+      return null
+    endif
+  else
+    # Check whether LSP server supports getting the location of a definition.
+    if !lspserver.isDefinitionProvider
+      return null
+    endif
+
+    # interface DefinitionParams
+    #   interface TextDocumentPositionParams
+    var reply = lspserver.rpc('textDocument/definition',
+			      lspserver.getTextDocPosition(false))
+    if reply->empty() || reply.result->empty()
+      return null
+    endif
+
+    if reply.result->type() == v:t_list
+      taglocations = reply.result
+    else
+      taglocations = [reply.result]
+    endif
+  endif
+
+  if lspserver.needOffsetEncoding
+    # Decode the position encoding in all the reference locations
+    taglocations->map((_, loc) => {
+      lspserver.decodeLocation(loc)
+      return loc
+    })
+  endif
+
+  return symbol.TagFunc(lspserver, taglocations, pat)
+enddef
+
+# Returns unique ID used for identifying the various servers
+var UniqueServerIdCounter = 0
+def GetUniqueServerId(): number
+  UniqueServerIdCounter += 1
+  return UniqueServerIdCounter
+enddef
+
+export def NewLspServer(serverParams: dict<any>): dict<any>
+  var lspserver: dict<any> = {
+    id: GetUniqueServerId(),
+    name: serverParams.name,
+    path: serverParams.path,
+    args: serverParams.args->deepcopy(),
+    running: false,
+    ready: false,
+    stoppedByUser: false,
+    job: v:none,
+    data: '',
+    caps: {},
+    callHierarchyType: '',
+    completionTriggerChars: [],
+    onTypeFormattingTriggers: [],
+    customNotificationHandlers: serverParams.customNotificationHandlers->deepcopy(),
+    customRequestHandlers: serverParams.customRequestHandlers->deepcopy(),
+    debug: serverParams.debug,
+    features: serverParams.features->deepcopy(),
+    forceOffsetEncoding: serverParams.forceOffsetEncoding,
+    initializationOptions: serverParams.initializationOptions->deepcopy(),
+    languageId: serverParams.languageId,
+    messages: [],
+    needOffsetEncoding: false,
+    omniCompletePending: false,
+    completeItemsIsIncomplete: false,
+    peekSymbolFilePopup: -1,
+    peekSymbolPopup: -1,
+    processDiagHandler: serverParams.processDiagHandler,
+    diagnosticResultIds: {},
+    diagnosticPullTimer: -1,
+    pendingPullBufnrs: {},
+    supportsDidOpenClose: false,
+    supportsDidSave: false,
+    supportsWorkDoneProgress: false,
+    sawWorkDoneProgressEnd: false,
+    workDoneProgressTokens: {},
+    rootSearchFiles: serverParams.rootSearch->deepcopy(),
+    runIfSearchFiles: serverParams.runIfSearch->deepcopy(),
+    runUnlessSearchFiles: serverParams.runUnlessSearch->deepcopy(),
+    selection: {},
+    signaturePopup: -1,
+    cachedBufferContent: {},
+    cachedBufferEol: {},
+    syncInit: serverParams.syncInit,
+    traceLevel: serverParams.traceLevel,
+    typeHierFilePopup: -1,
+    typeHierPopup: -1,
+    workspaceConfig: serverParams.workspaceConfig->deepcopy(),
+    workspaceSymbolPopup: -1,
+    workspaceSymbolQuery: ''
+  }
+  lspserver.logfile = $'lsp-{lspserver.name}.log'
+  lspserver.errfile = $'lsp-{lspserver.name}.err'
+
+  # Add the LSP server functions
+  lspserver->extend({
+    startServer: function(StartServer, [lspserver]),
+    initServer: function(InitServer, [lspserver]),
+    stopServer: function(StopServer, [lspserver]),
+    shutdownServer: function(ShutdownServer, [lspserver]),
+    exitServer: function(ExitServer, [lspserver]),
+    setTrace: function(SetTrace, [lspserver]),
+    traceLog: function(TraceLog, [lspserver]),
+    errorLog: function(ErrorLog, [lspserver]),
+    createResponse: function(CreateResponse, [lspserver]),
+    sendResponse: function(SendResponse, [lspserver]),
+    sendMessage: function(SendMessage, [lspserver]),
+    sendNotification: function(SendNotification, [lspserver]),
+    rpc: function(Rpc, [lspserver]),
+    rpc_a: function(AsyncRpc, [lspserver]),
+    processNotif: function(handlers.ProcessNotif, [lspserver]),
+    processRequest: function(handlers.ProcessRequest, [lspserver]),
+    processMessage: function(handlers.ProcessMessage, [lspserver]),
+    encodePosition: function(offset.EncodePosition, [lspserver]),
+    decodePosition: function(offset.DecodePosition, [lspserver]),
+    encodeRange: function(offset.EncodeRange, [lspserver]),
+    decodeRange: function(offset.DecodeRange, [lspserver]),
+    encodeLocation: function(offset.EncodeLocation, [lspserver]),
+    decodeLocation: function(offset.DecodeLocation, [lspserver]),
+    getPosition: function(GetPosition, [lspserver]),
+    getTextDocPosition: function(GetTextDocPosition, [lspserver]),
+    featureEnabled: function(FeatureEnabled, [lspserver]),
+    textdocDidOpen: function(TextdocDidOpen, [lspserver]),
+    textdocDidClose: function(TextdocDidClose, [lspserver]),
+    textdocDidChange: function(TextdocDidChange, [lspserver]),
+    sendInitializedNotif: function(SendInitializedNotif, [lspserver]),
+    sendWorkspaceConfig: function(SendWorkspaceConfig, [lspserver]),
+    getCompletion: function(GetCompletion, [lspserver]),
+    resolveCompletion: function(ResolveCompletion, [lspserver]),
+    gotoDefinition: function(GotoDefinition, [lspserver]),
+    gotoDeclaration: function(GotoDeclaration, [lspserver]),
+    gotoTypeDef: function(GotoTypeDef, [lspserver]),
+    gotoImplementation: function(GotoImplementation, [lspserver]),
+    tagFunc: function(TagFunc, [lspserver]),
+    switchSourceHeader: function(SwitchSourceHeader, [lspserver]),
+    showSignature: function(ShowSignature, [lspserver]),
+    didSaveFile: function(DidSaveFile, [lspserver]),
+    hover: function(ShowHoverInfo, [lspserver]),
+    showReferences: function(ShowReferences, [lspserver]),
+    findLocations: function(FindLocations, [lspserver]),
+    docHighlight: function(DocHighlight, [lspserver]),
+    getDocSymbols: function(GetDocSymbols, [lspserver]),
+    textDocFormat: function(TextDocFormat, [lspserver]),
+    textDocOnTypeFormat: function(TextDocOnTypeFormat, [lspserver]),
+    prepareCallHierarchy: function(PrepareCallHierarchy, [lspserver]),
+    incomingCalls: function(IncomingCalls, [lspserver]),
+    getIncomingCalls: function(GetIncomingCalls, [lspserver]),
+    outgoingCalls: function(OutgoingCalls, [lspserver]),
+    getOutgoingCalls: function(GetOutgoingCalls, [lspserver]),
+    inlayHintsShow: function(InlayHintsShow, [lspserver]),
+    typeHierarchy: function(TypeHierarchy, [lspserver]),
+    renameSymbol: function(RenameSymbol, [lspserver]),
+    codeAction: function(CodeAction, [lspserver]),
+    codeActionAsync: function(CodeActionAsync, [lspserver]),
+    pullDiagnostics: function(PullDiagnostics, [lspserver]),
+    queuePullDiagnostics: function(QueuePullDiagnostics, [lspserver]),
+    queuePullDiagnosticsAllBuffers: function(QueuePullDiagnosticsAllBuffers, [lspserver]),
+    codeLens: function(CodeLens, [lspserver]),
+    resolveCodeAction: function(ResolveCodeAction, [lspserver]),
+    resolveCodeLens: function(ResolveCodeLens, [lspserver]),
+    workspaceQuery: function(WorkspaceQuerySymbols, [lspserver]),
+    addWorkspaceFolder: function(AddWorkspaceFolder, [lspserver]),
+    removeWorkspaceFolder: function(RemoveWorkspaceFolder, [lspserver]),
+    selectionRange: function(SelectionRange, [lspserver]),
+    selectionExpand: function(SelectionExpand, [lspserver]),
+    selectionShrink: function(SelectionShrink, [lspserver]),
+    foldRange: function(FoldRange, [lspserver]),
+    executeCommand: function(ExecuteCommand, [lspserver]),
+    workspaceConfigGet: function(WorkspaceConfigGet, [lspserver]),
+    semanticHighlightUpdate: function(SemanticHighlightUpdate, [lspserver]),
+    getCapabilities: function(GetCapabilities, [lspserver]),
+    getInitializeRequest: function(GetInitializeRequest, [lspserver]),
+    addMessage: function(AddMessage, [lspserver]),
+    getMessages: function(GetMessages, [lspserver])
+  })
+
+  return lspserver
+enddef
+
+# vim: tabstop=8 shiftwidth=2 softtabstop=2 noexpandtab

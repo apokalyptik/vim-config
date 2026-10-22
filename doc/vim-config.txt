@@ -1,0 +1,69 @@
+*vim-config.txt*  Portable Vim configuration                     *vim-config*
+
+F1 opens the action menu. Type to filter, arrows choose, Enter runs, Esc closes.
+:VimMenu is the fallback when your terminal intercepts F1.
+
+Typing: suggestions do not select or insert a completion automatically.
+Arrows move normally and dismiss passive completion; Enter adds a newline;
+Tab indents. F2 enters completion selection, Up/Down preview, Enter accepts.
+Esc dismisses completion before returning to its ordinary mode behavior.
+
+Selection: v, V and CTRL-V retain their usual behavior. Copy uses Vim registers.
+Terminal mouse selection remains available; system clipboard support is optional.
+
+Menu: definitions, references, callers, symbols, problems, explicit formatting,
+Git/SVN operations, CSV/TSV validation/query, file finder, fast mode and health.
+Use Close current panel/window to leave a result panel.
+
+SETUP
+    bin/setup --profile container|sandbox|misc|laptop|wsl
+    bin/vim-config-doctor --profile PROFILE --lsp
+    bin/vim-config file.php
+
+Setup uses Bash 3.2+, tar, and sha256sum or openssl. It unpacks checked-in tools
+without network access or compilation. The file finder also uses Bash. Add
+--link-home only when you want to replace ~/.vimrc (the previous file is backed
+up). Environment VIM_CONFIG_PROFILE overrides the saved profile for a session.
+
+SANDBOX
+Only Work Sandbox has the blogs.dir -> /nfs symlink. Its helper launcher hides
+/nfs before executing tools and fails closed when isolation fails. Other hosts
+use direct helpers. Never select container to work around a failed Sandbox
+launcher on a tree requiring hard exclusions. Run the actual doctor on that host.
+
+PERFORMANCE
+500 KB / 15,000-line PHP files keep full IDE support. Default fast thresholds
+are 8 MiB / 100,000 lines. Syntax stops at column 8,000 and automatic expensive
+visual extras are off. F1 toggles fast mode per buffer; it does not change a
+server's independent background indexing. local.vim.example documents overrides.
+
+OFFLINE LANGUAGES
+PHPantom supplies PHP; TypeScript/HTML/CSS/JSON have a bundled Node runtime;
+gopls has a bundled Go SDK. Go module/toolchain downloads and JSON remote schema
+downloads are disabled. Project dependency content must already be available.
+Cgo needs project-specific compiler/native dependencies. SQL has syntax support;
+database-aware SQL tooling is not yet configured.
+
+The bundled gopls has a compatibility patch for missing /proc/self/exe. Its
+cache still hashes the binary contents. Close Vim before updating tools; pull
+the checkout, re-run bin/setup for your profile, and restart Vim.
+
+The container profile reduces worker pools, serializes Go commands and builds,
+and uses one semantic TypeScript server. Its supplied Linux launcher selects one
+permitted CPU before starting a server. The prebuilt Linux PHP server limits
+Tokio to one async worker and four blocking workers. Only one language family
+stays active; changing languages shuts down the previous family first. Switching
+back can require indexing again; unsaved buffers are restored from Vim memory.
+PHP has a timed TERM fallback for a stalled shutdown; the next family waits for
+confirmed exit. Re-enter the buffer to retry other lingering servers. Other
+profiles keep their normal concurrency.
+
+GOMAXPROCS is not an OS-thread cap; GOMEMLIMIT is a soft target. The session's
+process/thread allowance includes your shell, Vim and all helpers. Run the
+doctor with Vim closed and other jobs idle. Container Go uses a private
+telemetry-off configuration on Linux and the standard package driver.
+
+README.md has detailed deployment, exclusions, tool licences and limitations.
+VALIDATION.md records measured tests and distinguishes local/VM/real-host results.
+
+vim:tw=78:ft=help:norl:

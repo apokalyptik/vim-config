@@ -1,0 +1,131 @@
+#!/bin/bash
+# Bash 3.2 compatible. Everything needed for installation is in the checkout.
+set -euo pipefail
+config_root=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd -P)
+die() { printf '%s\n' "$*" >&2; exit 1; }
+usage() {
+    printf '%s\n' 'Usage: bin/setup [--profile container|sandbox|misc|laptop|wsl] [--platform darwin-arm64|linux-x86_64] [--link-home]'
+}
+case "$(uname -s):$(uname -m)" in
+    Darwin:arm64) platform=darwin-arm64; default_profile=laptop ;;
+    Linux:x86_64|Linux:amd64) platform=linux-x86_64; default_profile=container ;;
+    *) die 'Supported hosts: macOS ARM64 and Linux x86-64 (including WSL)' ;;
+esac
+profile=${VIM_CONFIG_PROFILE:-$default_profile}
+link_home=0
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --profile) [[ $# -ge 2 ]] || die 'Missing profile'; profile=$2; shift 2 ;;
+        --platform) [[ $# -ge 2 ]] || die 'Missing platform'; platform=$2; shift 2 ;;
+        --link-home) link_home=1; shift ;;
+        --help|-h) usage; exit 0 ;;
+        *) usage >&2; exit 64 ;;
+    esac
+done
+case "$profile" in container|sandbox|misc|laptop|wsl) ;; *) die 'Unknown profile' ;; esac
+case "$platform" in darwin-arm64|linux-x86_64) ;; *) die 'Unsupported platform' ;; esac
+if command -v sha256sum >/dev/null 2>&1; then
+    hash_tool=sha256sum
+elif command -v openssl >/dev/null 2>&1; then
+    hash_tool=openssl
+else
+    die 'Setup requires sha256sum or openssl for SHA-256 verification.'
+fi
+command -v tar >/dev/null 2>&1 || die 'Setup requires tar.'
+index="$config_root/tools/payloads.tsv"
+[[ -f "$index" ]] || die 'Missing included payload index: tools/payloads.tsv'
+umask 077
+mkdir -p "$config_root/.state"
+stage=$(mktemp -d "$config_root/.state/unpack.XXXXXXXX")
+install_started=0
+committed=0
+cleanup() {
+    local status=$?
+    local keep_stage=0
+    trap - EXIT
+    if [[ $install_started -eq 1 && $committed -eq 0 ]]; then
+        for name in "$platform" shared; do
+            # A missing staged directory means its replacement was installed.
+            if [[ ! -d "$stage/$name" ]]; then
+                rm -rf "$config_root/.state/tools/$name"
+            fi
+            if [[ -e "$stage/previous-$name" || -L "$stage/previous-$name" ]]; then
+                if ! mv "$stage/previous-$name" "$config_root/.state/tools/$name"; then
+                    printf 'Could not restore previous tools; recover them from %s\n' "$stage/previous-$name" >&2
+                    status=1
+                    keep_stage=1
+                fi
+            fi
+        done
+    fi
+    if [[ $keep_stage -eq 0 ]]; then rm -rf "$stage"; fi
+    exit "$status"
+}
+trap cleanup EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+safe_relative() {
+    [[ $1 =~ ^[A-Za-z0-9._/-]+$ ]] || return 1
+    case "/$1/" in //*|*/../*) return 1 ;; esac
+}
+selected=0
+while IFS=$'\t' read -r id payload_platform relative_archive expected destination strip_components extra; do
+    case "$id" in ''|\#*) continue ;; esac
+    [[ -z "$extra" && $id =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || die 'Invalid payload index row'
+    case "$payload_platform" in "$platform"|all) ;; *) continue ;; esac
+    safe_relative "$relative_archive" || die 'Invalid payload archive path'
+    case "$relative_archive" in payloads/*.tar.gz) ;; *) die 'Invalid payload archive path' ;; esac
+    safe_relative "$destination" || die 'Invalid payload destination'
+    case "$destination" in "$platform"|"$platform/"*|shared|shared/*) ;; *) die 'Invalid payload destination' ;; esac
+    [[ $expected =~ ^[0-9a-f]{64}$ ]] || die 'Invalid payload checksum'
+    case "$strip_components" in ''|*[!0-9]*) die 'Invalid strip_components' ;; esac
+    archive="$config_root/$relative_archive"
+    [[ -f "$archive" ]] || die "Missing included payload: $relative_archive"
+    if [[ $hash_tool == sha256sum ]]; then
+        digest=$(sha256sum "$archive")
+        digest=${digest%% *}
+    else
+        digest=$(openssl dgst -sha256 "$archive")
+        digest=${digest##* }
+    fi
+    [[ $digest == "$expected" ]] || die "Checksum mismatch: $id"
+    tar -tzf "$archive" > "$stage/archive.list" || die "Invalid archive: $id"
+    while IFS= read -r member; do
+        case "$member" in /*) die "Unsafe archive path: $id" ;; esac
+        case "/$member/" in */../*) die "Unsafe archive path: $id" ;; esac
+    done < "$stage/archive.list"
+    mkdir -p "$stage/$destination"
+    printf 'Unpacking %s\n' "$id"
+    tar -xzf "$archive" -C "$stage/$destination" --strip-components="$strip_components" || die "Unpack failed: $id"
+    selected=$((selected + 1))
+done < "$index"
+[[ $selected -gt 0 && -d "$stage/$platform" && -d "$stage/shared" ]] || die 'Incomplete payload index for selected platform'
+printf '%s\n' "$profile" > "$stage/profile"
+mkdir -p "$config_root/.state/tools"
+install_started=1
+for name in "$platform" shared; do
+    if [[ -e "$config_root/.state/tools/$name" || -L "$config_root/.state/tools/$name" ]]; then
+        mv "$config_root/.state/tools/$name" "$stage/previous-$name"
+    fi
+    mv "$stage/$name" "$config_root/.state/tools/$name"
+done
+mv "$stage/profile" "$config_root/.state/profile"
+committed=1
+if [[ $link_home -eq 1 ]]; then
+    target="${HOME:?HOME is required for --link-home}/.vimrc"
+    if [[ -e "$target" || -L "$target" ]]; then
+        backup="$target.before-vim-config-$(date +%s)-$$"
+        [[ ! -e "$backup" && ! -L "$backup" ]] || die "Backup already exists: $backup"
+        mv "$target" "$backup"
+        printf 'Previous vimrc saved as %s\n' "$backup"
+    fi
+    ln -s "$config_root/vimrc" "$target"
+fi
+export VIM_CONFIG_HELP_DIR="$config_root/doc"
+if ! vim -Nu NONE -i NONE -n -es -c 'execute "helptags " . fnameescape($VIM_CONFIG_HELP_DIR)' -c 'qa!'; then
+    printf '%s\n' 'Help tags could not be generated; the configuration can still start.' >&2
+fi
+printf 'Ready: profile=%s platform=%s\n' "$profile" "$platform"
+printf 'Start: %s/bin/vim-config\n' "$config_root"
+printf 'Verify: %s/bin/vim-config-doctor --profile %s --lsp\n' "$config_root" "$profile"

@@ -1,0 +1,104 @@
+#!/bin/sh
+# Internal stage, inside new user/mount/PID namespaces. Never mount over /nfs.
+set -eu
+[ "$#" -gt 0 ] || exit 64
+root_view=$VIM_CONFIG_ROOT_VIEW
+mount_path=$VIM_CONFIG_MOUNT_EXECUTABLE
+setpriv_path=$VIM_CONFIG_SETPRIV_EXECUTABLE
+chroot_path=$VIM_CONFIG_CHROOT_EXECUTABLE
+
+fail() {
+    printf '%s\n' 'helper-run: could not construct isolated filesystem; helper was not started.' >&2
+    exit 77
+}
+
+# A lexical deny test, deliberately performed BEFORE test/stat/readlink/mount.
+is_denied() {
+    while IFS= read -r denied || [ -n "$denied" ]; do
+        [ -n "$denied" ] || continue
+        case "$1" in "$denied"|"$denied"/*) return 0 ;; esac
+    done <<EOF
+$VIM_CONFIG_DENY_PATHS
+EOF
+    return 1
+}
+
+bind_path() {
+    "$mount_path" --no-mtab --internal-only --no-canonicalize --bind -- "$1" "$2" || fail
+}
+view_component=${root_view#/}
+view_component=/${view_component%%/*}
+
+"$mount_path" --no-mtab --internal-only --no-canonicalize -t tmpfs \
+    -o nosuid,nodev,mode=755,size=16m vim-config-root "$root_view" || fail
+
+# Globbing enumerates names in /; denied root names are skipped before any
+# classification. Symlink text is reproduced, so allowed symlinks still work
+# while aliases pointing into /nfs terminate in the empty local placeholder.
+for original in /* /.[!.]* /..?*; do
+    is_denied "$original" && continue
+    leaf=${original#/}
+    if [ "$original" = /proc ]; then
+        mkdir -- "$root_view/proc" || fail
+    elif [ -L "$original" ]; then
+        link_target=$(readlink -- "$original") || fail
+        ln -s -- "$link_target" "$root_view/$leaf" || fail
+    elif [ -d "$original" ]; then
+        mkdir -- "$root_view/$leaf" || fail
+        if [ "$original" = "$view_component" ]; then
+            # Exclude the private new-root mount. Linux rejects this operation
+            # if the source also has inherited locked submounts: fail closed.
+            bind_path "$original" "$root_view/$leaf"
+        else
+            # Inherited submounts are locked in less-privileged namespaces;
+            # nonrecursive bind would fail if such submounts were omitted.
+            "$mount_path" --no-mtab --internal-only --no-canonicalize --rbind \
+                -- "$original" "$root_view/$leaf" || fail
+        fi
+    elif [ -e "$original" ]; then
+        : > "$root_view/$leaf" || fail
+        bind_path "$original" "$root_view/$leaf"
+    fi
+done
+
+masked_paths=
+while IFS= read -r denied || [ -n "$denied" ]; do
+    [ -n "$denied" ] || continue
+    covered=no
+    while IFS= read -r masked || [ -n "$masked" ]; do
+        [ -n "$masked" ] || continue
+        case "$denied" in "$masked"|"$masked"/*) covered=yes; break ;; esac
+    done <<EOF
+$masked_paths
+EOF
+    [ "$covered" = no ] || continue
+    case "${denied#/}" in
+        */*)
+            # Additional nested denies must resolve their root in the isolated
+            # view. The default top-level /nfs omission avoids that operation.
+            "$mount_path" --no-mtab --internal-only --no-canonicalize -t tmpfs \
+                -o ro,nosuid,nodev,noexec,size=4k vim-config-denied "$root_view$denied" || fail
+            ;;
+        *) mkdir -- "$root_view$denied" || fail ;;
+    esac
+    masked_paths="${masked_paths}${masked_paths:+
+}$denied"
+done <<EOF
+$VIM_CONFIG_DENY_PATHS
+EOF
+
+is_denied /proc && fail
+"$mount_path" --no-mtab --internal-only --no-canonicalize -t proc \
+    -o nosuid,nodev,noexec proc "$root_view/proc" || fail
+# The skeleton is read-only; the existing project bind mounts stay writable.
+"$mount_path" --no-mtab --internal-only --no-canonicalize -t tmpfs \
+    -o remount,ro vim-config-root "$root_view" || fail
+
+exec "$chroot_path" "$root_view" "$setpriv_path" \
+    --bounding-set=-all --inh-caps=-all --ambient-caps=-all --no-new-privs -- \
+    /bin/sh -c '
+        cd -- "$VIM_CONFIG_HELPER_CWD" || exit 77
+        unset VIM_CONFIG_DENY_PATHS VIM_CONFIG_HELPER_CWD VIM_CONFIG_ROOT_VIEW
+        unset VIM_CONFIG_MOUNT_EXECUTABLE VIM_CONFIG_SETPRIV_EXECUTABLE VIM_CONFIG_CHROOT_EXECUTABLE
+        exec "$@"
+    ' vim-config-helper "$@"

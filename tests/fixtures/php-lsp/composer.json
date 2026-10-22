@@ -1,0 +1,4 @@
+{
+  "name": "apokalyptik/vim-config-fixture",
+  "autoload": { "psr-4": { "VimConfigFixture\\": "src/" } }
+}

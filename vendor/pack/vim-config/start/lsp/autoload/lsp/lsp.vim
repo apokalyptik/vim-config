@@ -1,0 +1,2049 @@
+vim9script
+
+# Vim9 LSP client
+#
+# The functions called by plugin/lsp.vim are in this file.
+
+# Needs Vim 9.0 and higher
+if v:version < 900
+  finish
+endif
+
+import './options.vim' as opt
+import './lspserver.vim' as lserver
+import './util.vim'
+import './buffer.vim' as buf
+import './completion.vim'
+import './textedit.vim'
+import './diag.vim'
+import './symbol.vim'
+import './outline.vim'
+import './signature.vim'
+import './codeaction.vim'
+import './hover.vim'
+import './inlayhints.vim'
+import './semantichighlight.vim'
+import './ontypeformat.vim'
+
+# filetype to LSP server map
+var ftypeServerMap: dict<list<dict<any>>> = {}
+
+var lspInitializedOnce = false
+var lspUserSetupOnce = false
+var lspEnabled = false
+
+def LspInitOnce()
+  # Define all plugin highlights/proptypes once per Vim session.
+  hlset([
+    {name: 'LspPopup', default: true, linksto: 'Pmenu'},
+    {name: 'LspPopupBorder', default: true, linksto: 'Pmenu'},
+    {name: 'LspTextRef', default: true, linksto: 'Search'},
+    {name: 'LspReadRef', default: true, linksto: 'DiffChange'},
+    {name: 'LspWriteRef', default: true, linksto: 'DiffDelete'}
+  ])
+
+  var override = &cursorline
+      && &cursorlineopt =~ '\<line\>\|\<screenline\>\|\<both\>'
+
+  prop_type_add('LspTextRef', {highlight: 'LspTextRef', override: override})
+  prop_type_add('LspReadRef', {highlight: 'LspReadRef', override: override})
+  prop_type_add('LspWriteRef', {highlight: 'LspWriteRef', override: override})
+
+  diag.InitOnce()
+  inlayhints.InitOnce()
+  signature.InitOnce()
+  symbol.InitOnce()
+  semantichighlight.InitOnce()
+  ontypeformat.InitOnce()
+
+  lspInitializedOnce = true
+enddef
+
+def RegisterEvents()
+  augroup LspAutoCmds
+    autocmd!
+    autocmd BufNewFile,BufReadPost,FileType * AddFile(expand('<abuf>')->str2nr())
+    autocmd BufEnter * if get(g:, 'vimconfig_profile', '') == 'container' | AddFile(expand('<abuf>')->str2nr()) | endif
+    # Note that when BufWipeOut is invoked, the current buffer may be different
+    # from the buffer getting wiped out.
+    autocmd BufWipeOut * RemoveFile(expand('<abuf>')->str2nr())
+    autocmd BufWinEnter * BufferLoadedInWin(expand('<abuf>')->str2nr())
+    # Pull fresh diagnostics when a file is modified outside Vim and reloaded
+    autocmd FileChangedShellPost * BufferExternallyChanged(expand('<abuf>')->str2nr())
+  augroup END
+enddef
+
+def DeregisterEvents()
+  augroup LspAutoCmds
+    autocmd!
+  augroup END
+enddef
+
+export def LspEnable()
+  if lspEnabled
+    return
+  endif
+
+  if !lspUserSetupOnce
+    # Invoke LspSetup user autocmd once
+    if exists('#User#LspSetup')
+      :doautocmd <nomodeline> User LspSetup
+    endif
+    lspUserSetupOnce = true
+  endif
+
+  RegisterEvents()
+
+  for binfo in getbufinfo()
+    AddFile(binfo.bufnr)
+  endfor
+
+  lspEnabled = true
+enddef
+
+export def LspDisable()
+  if !lspEnabled
+    return
+  endif
+
+  DeregisterEvents()
+
+  for binfo in getbufinfo()
+    RemoveFile(binfo.bufnr)
+  endfor
+
+  lspEnabled = false
+enddef
+
+# Returns the LSP servers for the a specific filetype. Based on how well there
+# score, LSP servers with the same score are being returned.
+# Returns an empty list if the servers is not found.
+def LspGetServers(bnr: number, ftype: string): list<dict<any>>
+  if !ftypeServerMap->has_key(ftype)
+    return []
+  endif
+
+  var bufDir = bnr->bufname()->fnamemodify(':p:h')
+
+  var servermap: list<dict<any>> = ftypeServerMap[ftype]->copy()
+
+  return servermap->filter((key, lspserver) => {
+    # Don't run the server if no path is found
+    if !lspserver.runIfSearchFiles->empty()
+      var path = util.FindNearestRootDir(bufDir, lspserver.runIfSearchFiles)
+
+      if path->empty()
+        return false
+      endif
+    endif
+
+    # Don't run the server if a path is found
+    if !lspserver.runUnlessSearchFiles->empty()
+      var path = util.FindNearestRootDir(bufDir, lspserver.runUnlessSearchFiles)
+
+      if !path->empty()
+        return false
+      endif
+    endif
+
+    # Run the server
+    return true
+  })
+enddef
+
+# Add a LSP server for a filetype
+def LspAddServer(ftype: string, lspsrv: dict<any>)
+  var lspsrvlst = ftypeServerMap->has_key(ftype) ? ftypeServerMap[ftype] : []
+  # Prevent duplicate registration of the same server name per filetype.
+  if util.Indexof(lspsrvlst, (_, v) => v.name == lspsrv.name) != -1
+      # LSP server already added for this file type
+      return
+  endif
+  lspsrvlst->add(lspsrv)
+  ftypeServerMap[ftype] = lspsrvlst
+enddef
+
+# Enable/disable the logging of the language server protocol messages
+def ServerDebug(arg: string)
+  if ['errors', 'messages', 'off', 'on']->index(arg) == -1
+    util.ErrMsg($'Unsupported argument "{arg}"')
+    return
+  endif
+
+  var lspservers: list<dict<any>> = buf.CurbufGetServers()
+  if lspservers->empty()
+    util.WarnMsg($'No Lsp servers found for "{@%}"')
+    return
+  endif
+
+  for lspserver in lspservers
+    if arg == 'on'
+      util.ClearTraceLogs(lspserver.logfile)
+      util.ClearTraceLogs(lspserver.errfile)
+      lspserver.debug = true
+    elseif arg == 'off'
+      lspserver.debug = false
+    elseif arg == 'messages'
+      util.ServerMessagesShow(lspserver.logfile)
+    else
+      util.ServerMessagesShow(lspserver.errfile)
+    endif
+  endfor
+enddef
+
+# Show information about all the LSP servers
+export def ShowAllServers()
+  var lines = []
+  # Add filetype to server mapping information
+  lines->add('Filetype Information')
+  lines->add('====================')
+  for [ftype, lspservers] in ftypeServerMap->items()
+    for lspserver in lspservers
+      lines->add($"Filetype: '{ftype}'")
+      lines->add($"Server Name: '{lspserver.name}'")
+      lines->add($"Server Path: '{lspserver.path}'")
+      lines->add($"Status: {lspserver.running ? 'Running' : 'Not running'}")
+      lines->add('')
+    endfor
+  endfor
+
+  # Add buffer to server mapping information
+  lines->add('Buffer Information')
+  lines->add('==================')
+  for bnr in range(1, bufnr('$'))
+    var lspservers: list<dict<any>> = buf.BufLspServersGet(bnr)
+    if !lspservers->empty()
+      lines->add($"Buffer: '{bufname(bnr)}'")
+      for lspserver in lspservers
+        lines->add($"Server Path: '{lspserver.path}'")
+        lines->add($"Status: {lspserver.running ? 'Running' : 'Not running'}")
+      endfor
+      lines->add('')
+    endif
+  endfor
+
+  var wid = bufwinid('Language-Servers')
+  if wid != -1
+    wid->win_gotoid()
+    :setlocal modifiable
+    :silent! :%d _
+  else
+    :new Language-Servers
+    :setlocal buftype=nofile
+    :setlocal bufhidden=wipe
+    :setlocal noswapfile
+    :setlocal nonumber nornu
+    :setlocal fdc=0 signcolumn=no
+  endif
+  setline(1, lines)
+  :setlocal nomodified
+  :setlocal nomodifiable
+enddef
+
+# Create a new window containing the buffer "bname" or if the window is
+# already present then jump to it.
+def OpenScratchWindow(bname: string)
+  var wid = bufwinid(bname)
+  if wid != -1
+    wid->win_gotoid()
+    :setlocal modifiable
+    :silent! :%d _
+  else
+    exe $':new {bname}'
+    :setlocal buftype=nofile
+    :setlocal bufhidden=wipe
+    :setlocal noswapfile
+    :setlocal nonumber nornu
+    :setlocal fdc=0 signcolumn=no
+  endif
+enddef
+
+# Show the status of the LSP server for the current buffer
+def ShowServer(arg: string)
+  if ['status', 'capabilities', 'initializeRequest', 'messages']->index(arg) == -1
+    util.ErrMsg($'Unsupported argument "{arg}"')
+    return
+  endif
+
+  var lspservers: list<dict<any>> = buf.CurbufGetServers()
+  if lspservers->empty()
+    util.WarnMsg($'No Lsp servers found for "{@%}"')
+    return
+  endif
+
+  var windowName: string = ''
+  var lines: list<string> = []
+  if arg->empty() || arg == 'status'
+    windowName = $'LangServer-Status'
+    for lspserver in lspservers
+      if !lines->empty()
+        lines->extend(['', repeat('=', &columns), ''])
+      endif
+      var msg = $"LSP server '{lspserver.name}' is "
+      if lspserver.running
+        msg ..= 'running'
+      else
+        msg ..= 'not running'
+      endif
+      lines->add(msg)
+    endfor
+  elseif arg == 'capabilities'
+    windowName = $'LangServer-Capabilities'
+    for lspserver in lspservers
+      if !lines->empty()
+        lines->extend(['', repeat('=', &columns), ''])
+      endif
+      lines->extend(lspserver.getCapabilities())
+    endfor
+  elseif arg == 'initializeRequest'
+    windowName = $'LangServer-InitializeRequest'
+    for lspserver in lspservers
+      if !lines->empty()
+        lines->extend(['', repeat('=', &columns), ''])
+      endif
+      lines->extend(lspserver.getInitializeRequest())
+    endfor
+  elseif arg == 'messages'
+    windowName = $'LangServer-Messages'
+    for lspserver in lspservers
+      if !lines->empty()
+        lines->extend(['', repeat('=', &columns), ''])
+      endif
+      lines->extend(lspserver.getMessages())
+    endfor
+  else
+    util.ErrMsg($'Unsupported argument "{arg}"')
+    return
+  endif
+
+  # Multi-line output is shown in a scratch window; single-line status is
+  # echoed directly to avoid opening a window for trivial output.
+  if lines->len() > 1
+    OpenScratchWindow(windowName)
+    setline(1, lines)
+    :setlocal nomodified
+    :setlocal nomodifiable
+  else
+    util.InfoMsg(lines[0])
+  endif
+enddef
+
+# Server start requested by the user for the file type in the current buffer
+def StartServerByUser()
+  var ftype: string = &filetype
+
+  var lspservers = ftypeServerMap->get(ftype, [])
+
+  if lspservers->empty()
+    util.WarnMsg($'No Lsp servers found for "{@%}"')
+    return
+  endif
+
+  # Update the list of servers attached to the current file type
+  for lspserver in lspservers
+    lspserver.stoppedByUser = false
+  endfor
+
+  # Add all the buffers with the current file type to the server
+  AddBuffersToLsp(ftype)
+enddef
+
+# Server stop requested by the user for the file type in the current buffer
+def StopServerByUser()
+  var lspservers: list<dict<any>> = buf.CurbufGetServers()->copy()
+  if lspservers->empty()
+    util.WarnMsg($'No Lsp servers found for "{@%}"')
+    return
+  endif
+
+  # Remove all the buffers with the same file type as the current buffer
+  var ftype: string = &filetype
+  for binfo in getbufinfo()
+    if binfo.bufnr->getbufvar('&filetype') == ftype
+      RemoveFile(binfo.bufnr)
+    endif
+  endfor
+
+  # Stop all the servers for this file type
+  for lspserver in lspservers
+    # Stop the server (if running)
+    if lspserver.running
+      lspserver.stopServer()
+      lspserver.stoppedByUser = true
+    endif
+  endfor
+enddef
+
+# Get LSP server running status for filetype "ftype"
+# Return true if running, or false if not found or not running
+export def ServerRunning(ftype: string): bool
+  if ftypeServerMap->has_key(ftype)
+    var lspservers = ftypeServerMap[ftype]
+    for lspserver in lspservers
+      if lspserver.running
+        return true
+      endif
+    endfor
+  endif
+
+  return false
+enddef
+
+# Return server for the current buffer. Returns empty dict if there is none.
+export def Server(): dict<any>
+  return buf.CurbufGetServer()
+enddef
+
+# Go to a definition using "textDocument/definition" LSP request
+export def GotoDefinition(peek: bool, cmdmods: string, count: number)
+  var lspserver: dict<any> = buf.CurbufGetServerChecked('definition')
+  if lspserver->empty()
+    if &tagfunc !=# 'lsp#lsp#TagFunc' && opt.lspOptions.definitionFallback
+      if cmdmods !~ 'silent'
+	util.WarnMsg($'definition lookup unsupported; falling back to tags file')
+      endif
+      try
+	# Use :tjump instead of 'CTRL-]' using :tag because
+	# 'tjump' works better with multiple tags.
+	# Use commands as mappings close selection dialog immediately!
+	if peek
+	  execute (v:count > 0 ? ':' .. v:count .. 'ptag' : 'ptjump') expand('<cword>')
+	else
+	  execute (v:count > 0 ? ':' .. v:count .. 'tag' : 'tjump') expand('<cword>')
+	endif
+      catch /^Vim\%((\a\+)\)\=:E42[36]/
+      endtry
+    endif
+    return
+  endif
+
+  lspserver.gotoDefinition(peek, cmdmods, count)
+enddef
+
+# Go to a declaration using "textDocument/declaration" LSP request
+export def GotoDeclaration(peek: bool, cmdmods: string, count: number)
+  var lspserver: dict<any> = buf.CurbufGetServerChecked('declaration')
+  if lspserver->empty()
+    return
+  endif
+
+  lspserver.gotoDeclaration(peek, cmdmods, count)
+enddef
+
+# Go to a type definition using "textDocument/typeDefinition" LSP request
+export def GotoTypedef(peek: bool, cmdmods: string, count: number)
+  var lspserver: dict<any> = buf.CurbufGetServerChecked('typeDefinition')
+  if lspserver->empty()
+    return
+  endif
+
+  lspserver.gotoTypeDef(peek, cmdmods, count)
+enddef
+
+# Go to a implementation using "textDocument/implementation" LSP request
+export def GotoImplementation(peek: bool, cmdmods: string, count: number)
+  var lspserver: dict<any> = buf.CurbufGetServerChecked('implementation')
+  if lspserver->empty()
+    return
+  endif
+
+  lspserver.gotoImplementation(peek, cmdmods, count)
+enddef
+
+# Switch source header using "textDocument/switchSourceHeader" LSP request
+# (Clangd specifc extension)
+export def SwitchSourceHeader()
+  var lspserver: dict<any> = buf.CurbufGetServerChecked()
+  if lspserver->empty()
+    return
+  endif
+
+  lspserver.switchSourceHeader()
+enddef
+
+# A buffer is saved. Send the "textDocument/didSave" LSP notification
+def LspSavedFile(bnr: number)
+  var lspservers: list<dict<any>> = buf.BufLspServersGet(bnr)->copy()
+
+  # Copy + filter keeps iteration safe and skips detached/non-running entries.
+  lspservers = lspservers->filter(
+    (key, lspsrv) => !lspsrv->empty() && lspsrv.running
+  )
+
+  if lspservers->empty()
+    return
+  endif
+
+  for lspserver in lspservers
+    lspserver.didSaveFile(bnr)
+  endfor
+enddef
+
+# Called after leaving insert mode. Used to process diag messages (if any)
+def LspLeftInsertMode(bnr: number)
+  var lspservers: list<dict<any>> = buf.BufLspServersGet(bnr)->copy()
+
+  lspservers = lspservers->filter(
+    (key, lspsrv) => !lspsrv->empty() && lspsrv.running
+      && lspsrv.ready && lspsrv.isDiagnosticsProvider
+  )
+  for lspserver in lspservers
+    lspserver.queuePullDiagnostics(bnr)
+  endfor
+
+  var updatePending: bool = bnr->getbufvar('LspDiagsUpdatePending', false)
+  if !updatePending
+    return
+  endif
+  setbufvar(bnr, 'LspDiagsUpdatePending', false)
+
+  diag.ProcessNewDiags(bnr)
+enddef
+
+def LspHoverAutoSchedule(bnr: number)
+  hover.HoverAutoSchedule(bnr)
+enddef
+
+def LspHoverAutoStop(bnr: number)
+  hover.HoverAutoStop(bnr)
+enddef
+
+# Add buffer-local autocmds when attaching a LSP server to a buffer
+def AddBufLocalAutocmds(lspserver: dict<any>, bnr: number): void
+  var acmds: list<dict<any>> = []
+
+  # file saved notification handler
+  acmds->add({bufnr: bnr,
+	      event: 'BufWritePost',
+	      group: 'LSPBufferAutocmds',
+	      cmd: $'LspSavedFile({bnr})'})
+
+  # Update the diagnostics when insert mode is stopped
+  acmds->add({bufnr: bnr,
+	      event: 'InsertLeave',
+	      group: 'LSPBufferAutocmds',
+	      cmd: $'LspLeftInsertMode({bnr})'})
+
+  # Auto highlight all the occurrences of the current keyword
+  if opt.lspOptions.autoHighlight &&
+			lspserver.isDocumentHighlightProvider
+    acmds->add({bufnr: bnr,
+		event: 'CursorMoved',
+		group: 'LSPBufferAutocmds',
+		cmd: $'call LspDocHighlightClear({bnr}) | call LspDocHighlight({bnr}, "silent")'})
+  endif
+
+  if opt.lspOptions.hoverOnCursorHold && lspserver.isHoverProvider
+    # Setup autocmds for auto hover display
+    acmds->add({bufnr: bnr,
+		event: 'CursorHold',
+		group: 'LSPBufferAutocmds',
+		cmd: $'LspHoverAutoSchedule({bnr})'})
+    acmds->add({bufnr: bnr,
+		event: ['CursorMoved', 'BufLeave'],
+		group: 'LSPBufferAutocmds',
+		cmd: $'LspHoverAutoStop({bnr})'})
+  endif
+
+  autocmd_add(acmds)
+enddef
+
+def RemoveBufLocalAutocmds(bnr: number): void
+  try
+    autocmd_delete([{bufnr: bnr, group: 'LSPBufferAutocmds'}])
+  catch /E367:/
+    # The tests can call RemoveFile() without creating this augroup.
+  endtry
+enddef
+
+def AddBufListener(lspserver: dict<any>, bnr: number): void
+  # Add a per-buffer listener so incremental text changes are pushed to the
+  # server and pull diagnostics are debounced from edits.
+  var listenerId = listener_add((_bnr: number, start: number, end: number, added: number, changes: list<dict<number>>) => {
+    lspserver.textdocDidChange(bnr)
+    if lspserver.isDiagnosticsProvider
+      lspserver.queuePullDiagnostics(bnr)
+    endif
+  }, bnr)
+  var listenerIds = bnr->getbufvar('LspListenerIds', [])
+  setbufvar(bnr, 'LspListenerIds', listenerIds + [listenerId])
+enddef
+
+def RemoveBufListener(bnr: number): void
+  for listenerId in bnr->getbufvar('LspListenerIds', [])
+    listener_remove(listenerId)
+  endfor
+  setbufvar(bnr, 'LspListenerIds', [])
+enddef
+
+# LspAttached autocmd per buffer state
+var bufAttachStates: dict<dict<any>>
+
+# Returns true if the LspAttached autocmd is either pending or already fired
+# for buffer 'bnr'.
+def LspAttached(bnr: number): bool
+  var acmd_state: dict<any> =  bufAttachStates->get(bnr, {})
+
+  if acmd_state->empty()
+    return false
+  endif
+
+  return acmd_state->get('pending', false) || acmd_state->get('fired', false)
+enddef
+
+# Invoke the LspAttached autocmd for buffer 'bnr'
+export def FireLspAttachedAutocmd(bnr: number): void
+  bufAttachStates[bnr] = {pending: false, fired: true}
+
+  var attachedBufName = bnr->bufname()
+  var attachedBufPath = attachedBufName->empty()
+    ? ''
+    : attachedBufName->fnamemodify(':p')
+  var attachedServerNames = buf.BufLspServersGet(bnr)->copy()
+    ->filter((_, lspsrv) => !lspsrv->empty())
+    ->map((_, lspsrv) => lspsrv.name)
+
+  g:LspAttachedContext = {
+    bufnr: bnr,
+    file: attachedBufPath,
+    servers: attachedServerNames
+  }
+  doautocmd <nomodeline> User LspAttached
+enddef
+
+# The LSP server with ID "lspserverId" is ready, initialize the LSP features
+# for buffer "bnr".
+def BufferInit(lspserverId: number, bnr: number): void
+  var lspserver = buf.BufLspServerGetById(bnr, lspserverId)
+  if lspserver->empty() || !lspserver.running
+    return
+  endif
+
+  var ftype: string = bnr->getbufvar('&filetype')
+  lspserver.textdocDidOpen(bnr, ftype)
+
+  AddBufListener(lspserver, bnr)
+
+  AddBufLocalAutocmds(lspserver, bnr)
+
+  diag.BufferInit(lspserver, bnr)
+
+  if lspserver.isDiagnosticsProvider
+    lspserver.pullDiagnostics(bnr)
+  endif
+
+  # Delay feature-specific initialization until all attached servers are ready,
+  # so feature-provider selection uses finalized capabilities.
+  var allServersReady = true
+  var lspservers: list<dict<any>> = buf.BufLspServersGet(bnr)
+  for lspsrv in lspservers
+    if !lspsrv.ready
+      allServersReady = false
+      break
+    endif
+  endfor
+
+  if allServersReady
+    for lspsrv in lspservers
+      # It's only possible to initialize the features when the server
+      # capabilities of all the registered language servers for this file type
+      # are known.
+      var serverId = lspsrv.id
+      var completionServer = buf.BufLspServerGet(bnr, 'completion')
+      if !completionServer->empty() && serverId == completionServer.id
+        completion.BufferInit(lspsrv, bnr, ftype)
+      endif
+
+      var signatureServer = buf.BufLspServerGet(bnr, 'signatureHelp')
+      if !signatureServer->empty() && serverId == signatureServer.id
+	signature.BufferInit(lspsrv)
+      endif
+
+      var inlayHintServer = buf.BufLspServerGet(bnr, 'inlayHint')
+      if !inlayHintServer->empty() && serverId == inlayHintServer.id
+	inlayhints.BufferInit(lspsrv, bnr)
+      endif
+
+      var semanticServer = buf.BufLspServerGet(bnr, 'semanticTokens')
+      if !semanticServer->empty() && serverId == semanticServer.id
+	semantichighlight.BufferInit(lspserver, bnr)
+      endif
+
+      var onTypeFormatServer = buf.BufLspServerGet(bnr, 'documentOnTypeFormatting')
+      if !onTypeFormatServer->empty() && serverId == onTypeFormatServer.id
+	ontypeformat.BufferInit(lspsrv, bnr)
+      endif
+    endfor
+
+    if exists('#User#LspAttached')
+      if LspAttached(bnr)
+        return
+      endif
+
+      bufAttachStates[bnr] = {pending: true, fired: false}
+      if bnr == bufnr()
+        FireLspAttachedAutocmd(bnr)
+      else
+        # Delay doautocmd until entering the buffer
+        execute 'autocmd LspAutoCmds BufEnter <buffer=' .. bnr .. '>'
+              \ .. $' ++once FireLspAttachedAutocmd({bnr})'
+      endif
+    endif
+  endif
+enddef
+
+# A new buffer is opened. If LSP is supported for this buffer, then add it
+export def AddFile(bnr: number): void
+  # Downstream: apply host exclusions and fast mode before root discovery.
+  if exists('*g:VimConfigLspAllow') && !g:VimConfigLspAllow(bnr)
+    return
+  endif
+  # Skip remote files
+  if util.LspUriRemote(bnr->bufname()->fnamemodify(':p'))
+    return
+  endif
+
+  # Skip popup buffers (special UI buffers should not attach language servers).
+  var buftype: string = bnr->getbufvar('&buftype')
+  if buftype ==# 'popup'
+    return
+  endif
+
+  var ftype: string = bnr->getbufvar('&filetype')
+  if ftype->empty()
+    return
+  endif
+  var lspservers: list<dict<any>> = LspGetServers(bnr, ftype)
+  # Downstream: stop the preceding container family before starting another.
+  if !VimConfigSelectFamily(bnr, lspservers)
+    return
+  endif
+  if lspservers->empty()
+    return
+  endif
+
+  # Start all the lsp servers registered for this buffer file type (if needed)
+  var attachedServerIds: list<number> = buf.BufLspServersGet(bnr)
+    ->copy()
+    ->filter((_, lspsrv) => !lspsrv->empty())
+    ->map((_, lspsrv) => lspsrv.id)
+  var attachedServers: list<dict<any>> = []
+  var vimConfigFamilyStarted = false
+  for lspserver in lspservers
+    if lspserver.stoppedByUser
+      continue
+    endif
+
+    if attachedServerIds->index(lspserver.id) != -1
+      # This server is already attached to the buffer
+      continue
+    endif
+
+    if !lspserver.running
+      if !lspInitializedOnce
+        LspInitOnce()
+      endif
+      lspserver.startServer(bnr)
+      vimConfigFamilyStarted = true
+    endif
+
+    buf.BufLspServerSet(bnr, lspserver)
+    attachedServers->add(lspserver)
+  endfor
+
+  for lspserver in attachedServers
+    if lspserver.ready
+      BufferInit(lspserver.id, bnr)
+    else
+      # Lsp server is not ready yet.  Initialize the lsp state for this buffer
+      # when the server is ready.
+      # The user event is server-id scoped, so each delayed init is tied to the
+      # exact server instance attached to this buffer.
+      var serverId = lspserver.id
+      autocmd_add([{group: 'LSPBufferAutocmds',
+                   event: 'User',
+                   pattern: $'LspServerReady_{serverId}',
+                   once: true,
+                   cmd: $'BufferInit({serverId}, {bnr})'}])
+    endif
+  endfor
+  # Downstream: reopen loaded same-family buffers from their in-memory contents.
+  if vimConfigFamilyStarted
+    VimConfigReattachFamily(bnr, lspservers)
+  endif
+
+enddef
+
+# Notify LSP server to remove a file
+export def RemoveFile(bnr: number): void
+  var lspservers: list<dict<any>> = buf.BufLspServersGet(bnr)
+  var detachedBufName = bnr->bufname()
+  var detachedBufPath = detachedBufName->empty()
+    ? ''
+    : detachedBufName->fnamemodify(':p')
+  var detachedServerNames = lspservers->copy()
+    ->filter((_, lspsrv) => !lspsrv->empty())
+    ->map((_, lspsrv) => lspsrv.name)
+  var hasLspDetachedAutocmd = exists('#User#LspDetached')
+  var hadAttachedServers = !lspservers->empty()
+  if hadAttachedServers
+    RemoveBufLocalAutocmds(bnr)
+    RemoveBufListener(bnr)
+  endif
+  # Iterate over a copy because BufLspServerRemove mutates the underlying list.
+  for lspserver in lspservers->copy()
+    if lspserver->empty()
+      continue
+    endif
+    var serverId = lspserver.id
+    try
+      autocmd_delete([{group: 'LSPBufferAutocmds',
+                     event: 'User',
+                     pattern: $'LspServerReady_{serverId}',
+                     cmd: $'BufferInit({serverId}, {bnr})'}])
+    catch /E367:/
+      # The tests can call RemoveFile() without creating this augroup.
+    endtry
+    if lspserver.running
+      lspserver.textdocDidClose(bnr)
+    endif
+    diag.DiagRemoveFile(bnr)
+    buf.BufLspServerRemove(bnr, lspserver)
+  endfor
+
+  if hadAttachedServers && hasLspDetachedAutocmd
+    # User autocommands allow only one match pattern; provide detach details
+    # through a global context dict for handlers.
+    g:LspDetachedContext = {
+      bufnr: bnr,
+      file: detachedBufPath,
+      servers: detachedServerNames
+    }
+    doautocmd <nomodeline> User LspDetached
+  endif
+
+  if bufAttachStates->has_key(bnr)
+    bufAttachStates->remove(bnr)
+  endif
+enddef
+
+# Buffer 'bnr' is loaded in a window, refresh visuals and UI state.
+export def BufferLoadedInWin(bnr: number)
+  var lspservers: list<dict<any>> = buf.BufLspServersGet(bnr)
+  if lspservers->empty()
+    # No language servers for this buffer
+    return
+  endif
+  for lspserver in lspservers
+    if !lspserver->empty() && lspserver.ready
+      lspserver.textdocDidChange(bnr)
+    endif
+  endfor
+  # Refresh the displayed diags visuals
+  if opt.lspOptions.autoHighlightDiags
+    diag.DiagsRefresh(bnr)
+  endif
+
+  completion.BufferLoadedInWin(bnr)
+
+  # Refresh the semantic highlights
+  if opt.lspOptions.semanticHighlight
+    var semanticServer = buf.BufLspServerGet(bnr, 'semanticTokens')
+    if !semanticServer->empty()
+      semanticServer.semanticHighlightUpdate(bnr)
+    endif
+  endif
+enddef
+
+# File was modified outside of Vim and reloaded. Refresh diagnostics.
+export def BufferExternallyChanged(bnr: number): void
+  var lspservers: list<dict<any>> = buf.BufLspServersGet(bnr)
+  if lspservers->empty()
+    return
+  endif
+
+  for lspserver in lspservers
+    if !lspserver->empty() && lspserver.running && lspserver.ready
+      # Notify server of the change to trigger re-analysis
+      lspserver.textdocDidChange(bnr)
+      if lspserver.isDiagnosticsProvider
+        # For pull-based diagnostics, explicitly request fresh diagnostics
+        lspserver.queuePullDiagnostics(bnr)
+      endif
+    endif
+  endfor
+enddef
+
+# Send synchronous "shutdown" request to LSP server with a tiny timeout.
+# It's for vim exit. We're in a hurry and ain't waiting for slow servers.
+# Time out of slow responses within a split second (125 milliseconds).
+def FastShutdownServer(lspserver: dict<any>): void
+  if lspserver.job->job_status() == 'run'
+    lspserver.shutdownServer(125)     # 125 msec timeout
+  endif
+enddef
+
+# Send shutdown/exit to all the LSP servers (fast for vim exit)
+export def FastShutdownExitAllServers()
+  for lspservers in ftypeServerMap->values()
+    for lspserver in lspservers
+      if lspserver.running
+	FastShutdownServer(lspserver)
+	lspserver.exitServer()
+	lspserver.running = false
+	lspserver.ready = false
+      endif
+    endfor
+  endfor
+enddef
+
+# Add all the buffers with 'filetype' set to "ftype" to the language server.
+def AddBuffersToLsp(ftype: string)
+  # Add all the buffers with the same file type as the current buffer
+  for binfo in getbufinfo({bufloaded: 1})
+    if binfo.bufnr->getbufvar('&filetype') == ftype
+      AddFile(binfo.bufnr)
+    endif
+  endfor
+enddef
+
+# Restart the LSP server for the current buffer
+def RestartServer()
+  var ftype: string = &filetype
+
+  var lspservers = ftypeServerMap->get(ftype, [])
+
+  if lspservers->empty()
+    util.WarnMsg($'No Lsp servers found for "{@%}"')
+    return
+  endif
+
+  # Remove all the buffers with the same file type as the current buffer
+  for binfo in getbufinfo()
+    if binfo.bufnr->getbufvar('&filetype') == ftype
+      RemoveFile(binfo.bufnr)
+    endif
+  endfor
+
+  for lspserver in lspservers
+    # Stop the server (if running)
+    if lspserver.running
+      lspserver.stopServer()
+    endif
+    lspserver.stoppedByUser = false
+
+    # Start the server again
+    lspserver.startServer(bufnr())
+  endfor
+
+  AddBuffersToLsp(ftype)
+enddef
+
+# Add the LSP server for files with 'filetype' as "ftype".
+def AddServerForFiltype(lspserver: dict<any>, ftype: string, omnicompl: bool)
+  LspAddServer(ftype, lspserver)
+  completion.OmniComplSet(ftype, omnicompl)
+
+  # If a buffer of this file type is already present, then send it to the LSP
+  # server now.
+  AddBuffersToLsp(ftype)
+enddef
+
+# Register a LSP server for one or more file types
+export def AddServer(serverList: list<dict<any>>)
+  for server in serverList
+    if !server->has_key('filetype') || !server->has_key('path')
+      util.ErrMsg('LSP server information is missing filetype or path')
+      continue
+    endif
+    # Enable omni-completion by default when auto-complete is disabled, unless
+    # the user explicitly overrides this per server.
+    var omnicompl_def: bool = false
+    if opt.lspOptions.omniComplete == true
+	|| (opt.lspOptions.omniComplete == null
+	    && !opt.lspOptions.autoComplete)
+      omnicompl_def = true
+    endif
+    server.omnicompl = server->get('omnicompl', omnicompl_def)
+
+    server.path = expandcmd(server.path)
+
+    # Skip missing executables unless user opted into silent ignore.
+    if !server.path->executable()
+      if !opt.lspOptions.ignoreMissingServer
+        util.ErrMsg($'LSP server {server.path} is not found')
+      endif
+      continue
+    endif
+    if server->has_key('args')
+      if server.args->type() != v:t_list
+        util.ErrMsg($'Arguments for LSP server {server.args} is not a List')
+        continue
+      endif
+    else
+      server.args = []
+    endif
+
+    # Normalize optional fields to canonical types expected by NewLspServer().
+    if !server->has_key('initializationOptions')
+	|| server.initializationOptions->type() != v:t_dict
+      server.initializationOptions = {}
+    endif
+
+    if !server->has_key('forceOffsetEncoding')
+	|| server.forceOffsetEncoding->type() != v:t_string
+	|| (server.forceOffsetEncoding != 'utf-8'
+	    && server.forceOffsetEncoding != 'utf-16'
+	    && server.forceOffsetEncoding != 'utf-32')
+      server.forceOffsetEncoding = ''
+    endif
+
+    if !server->has_key('customNotificationHandlers')
+	|| server.customNotificationHandlers->type() != v:t_dict
+      server.customNotificationHandlers = {}
+    endif
+
+    if server->has_key('processDiagHandler')
+      if server.processDiagHandler->type() != v:t_func
+        util.ErrMsg($'Setting of processDiagHandler {server.processDiagHandler} is not a Funcref nor lambda')
+        continue
+      endif
+    else
+      server.processDiagHandler = null_function
+    endif
+
+    if !server->has_key('customRequestHandlers')
+	|| server.customRequestHandlers->type() != v:t_dict
+      server.customRequestHandlers = {}
+    endif
+
+    if !server->has_key('features') || server.features->type() != v:t_dict
+      server.features = {}
+    endif
+
+    if server.omnicompl->type() != v:t_bool
+      util.ErrMsg($'Setting of omnicompl {server.omnicompl} is not a Boolean')
+      continue
+    endif
+
+    if !server->has_key('syncInit')
+      server.syncInit = false
+    endif
+
+    if !server->has_key('name') || server.name->type() != v:t_string
+	|| server.name->empty()
+      # Use the executable name (without the extension) as the language server
+      # name.
+      server.name = server.path->fnamemodify(':t:r')
+    endif
+
+    if !server->has_key('debug') || server.debug->type() != v:t_bool
+      server.debug = false
+    endif
+
+    if !server->has_key('traceLevel')
+	|| server->type() != v:t_string
+	|| (server.traceLevel != 'off' && server.traceLevel != 'debug'
+	    && server.traceLevel != 'verbose')
+      server.traceLevel = 'off'
+    endif
+
+    if !server->has_key('workspaceConfig')
+	|| server.workspaceConfig->type() != v:t_dict
+      server.workspaceConfig = {}
+    endif
+
+    if !server->has_key('rootSearch') || server.rootSearch->type() != v:t_list
+      server.rootSearch = []
+    endif
+
+    if !server->has_key('runIfSearch') ||
+	server.runIfSearch->type() != v:t_list
+      server.runIfSearch = []
+    endif
+
+    if !server->has_key('runUnlessSearch') ||
+	server.runUnlessSearch->type() != v:t_list
+      server.runUnlessSearch = []
+    endif
+
+    if !server->has_key('languageId') ||
+	server.languageId->type() != v:t_func
+      server.languageId = v:none
+    endif
+
+    # Freeze normalized config into a concrete server instance.
+    var lspserver: dict<any> = lserver.NewLspServer(server)
+
+    var ftypes = server.filetype
+    if ftypes->type() == v:t_string
+      AddServerForFiltype(lspserver, ftypes, server.omnicompl)
+    elseif ftypes->type() == v:t_list
+      for ftype in ftypes
+	AddServerForFiltype(lspserver, ftype, server.omnicompl)
+      endfor
+    else
+      util.ErrMsg($'Unsupported file type information "{ftypes->string()}" in LSP server registration')
+      continue
+    endif
+  endfor
+enddef
+
+# The LSP server is considered ready when the server capabilities are
+# received ("initialize" LSP reply message)
+export def ServerReady(): bool
+  var fname: string = @%
+  if fname->empty()
+    return false
+  endif
+
+  var lspservers: list<dict<any>> = buf.CurbufGetServers()
+  if lspservers->empty()
+    return false
+  endif
+
+  for lspserver in lspservers
+    if !lspserver.ready
+      return false
+    endif
+  endfor
+
+  return true
+enddef
+
+# set the LSP server trace level for the current buffer
+# Params: SetTraceParams
+def ServerTraceSet(traceVal: string)
+  if ['off', 'messages', 'verbose']->index(traceVal) == -1
+    util.ErrMsg($'Unsupported argument "{traceVal}"')
+    return
+  endif
+
+  var lspservers: list<dict<any>> = buf.CurbufGetServers()
+  if lspservers->empty()
+    util.WarnMsg($'No Lsp servers found for "{@%}"')
+    return
+  endif
+
+  for lspserver in lspservers
+    lspserver.setTrace(traceVal)
+  endfor
+enddef
+
+# Display the diagnostic messages from the LSP server for the current buffer
+# in a quickfix list
+export def ShowDiagnostics(): void
+  diag.ShowAllDiags()
+enddef
+
+# Show the diagnostic message for the current line
+export def LspShowCurrentDiag(atPos: bool)
+  diag.ShowCurrentDiag(atPos)
+enddef
+
+# get the count of diagnostics in the current buffer
+export def ErrorCount(): dict<number>
+  var res = {Error: 0, Warn: 0, Info: 0, Hint: 0}
+  var fname: string = @%
+  if fname->empty()
+    return res
+  endif
+
+  return diag.DiagsGetErrorCount(bufnr())
+enddef
+
+# jump to the next/previous/first diagnostic message in the current buffer
+export def JumpToDiag(which: string, count: number = 0): void
+  diag.LspDiagsJump(which, count)
+enddef
+
+# Display the hover message from the LSP server for the current cursor
+# location
+export def Hover(cmdmods: string)
+  var lspserver: dict<any> = buf.CurbufGetServerChecked('hover')
+  if lspserver->empty()
+    if &keywordprg !=# ':LspHover' && !empty(&l:keywordprg) && opt.lspOptions.hoverFallback
+      if cmdmods !~ 'silent'
+      	util.WarnMsg($'Hovering unsupported; falling back to built-in.')
+      endif
+      try
+      	execute 'normal! K'
+      catch /.*/
+      	# Ignore any errors from built-in fallback
+      endtry
+    endif
+    return
+  endif
+
+  lspserver.hover(cmdmods)
+enddef
+
+# Enable or disable inlay hints
+export def InlayHints(ctl: string)
+  if ctl == 'enable'
+    inlayhints.InlayHintsEnable()
+  elseif ctl == 'disable'
+    inlayhints.InlayHintsDisable()
+  elseif ctl == 'toggle'
+    inlayhints.InlayHintsToggle()
+  else
+    util.ErrMsg($'LspInlayHints - Unsupported argument "{ctl}"')
+  endif
+enddef
+
+# Command-line completion for the ":LspInlayHints" command
+export def LspInlayHintsComplete(arglead: string, cmdline: string, cursorPos: number): list<string>
+  var l = ['enable', 'disable', 'toggle']
+  return filter(l, (_, val) => val =~ $'^{arglead}')
+enddef
+
+# show symbol references
+export def ShowReferences(peek: bool)
+  var lspserver: dict<any> = buf.CurbufGetServerChecked('references')
+  if lspserver->empty()
+    return
+  endif
+
+  lspserver.showReferences(peek)
+enddef
+
+# send custom locations request
+def g:LspFindLocations(server_name: string, peek: bool, method: string, args: dict<any> = {})
+  var lspserver: dict<any> = buf.CurbufGetServerByName(server_name)
+  if lspserver->empty()
+    return
+  endif
+  if !lspserver.running
+    util.ErrMsg($'Language server "{server_name}" is not running')
+    return
+  endif
+  if !lspserver.ready
+    util.ErrMsg($'Language server "{server_name}" is not ready')
+    return
+  endif
+
+  lspserver.findLocations(peek, method, args)
+enddef
+
+# highlight all the places where a symbol is referenced
+def g:LspDocHighlight(bnr: number = bufnr(), cmdmods: string = '')
+  var lspserver: dict<any> = buf.CurbufGetServerChecked('documentHighlight')
+  if lspserver->empty()
+    return
+  endif
+
+  lspserver.docHighlight(bnr, cmdmods)
+enddef
+
+# clear the symbol reference highlight
+def g:LspDocHighlightClear(bnr: number = bufnr())
+  var lspserver: dict<any> = buf.CurbufGetServerChecked('documentHighlight')
+  if lspserver->empty()
+    return
+  endif
+
+  var propNames = ['LspTextRef', 'LspReadRef', 'LspWriteRef']
+  if has('patch-9.0.0233')
+    prop_remove({types: propNames, bufnr: bnr, all: true})
+  else
+    for propName in propNames
+      prop_remove({type: propName, bufnr: bnr, all: true})
+    endfor
+  endif
+enddef
+
+def g:LspRequestDocSymbols()
+  if outline.SkipOutlineRefresh()
+    return
+  endif
+
+  var fname: string = @%
+  if fname->empty()
+    return
+  endif
+
+  var lspserver: dict<any> = buf.CurbufGetServer('documentSymbol')
+  if lspserver->empty() || !lspserver.running || !lspserver.ready
+    return
+  endif
+
+  lspserver.getDocSymbols(fname, true)
+enddef
+
+# open a window and display all the symbols in a file (outline)
+export def Outline(ctl: string, cmdmods: string, winsize: number)
+  var fname: string = @%
+  if fname->empty()
+    return
+  endif
+
+  var lspserver: dict<any> = buf.CurbufGetServerChecked('documentSymbol')
+  if (lspserver->empty() || !lspserver.running || !lspserver.ready) && fname != 'LSP-Outline'
+    return
+  endif
+
+  if ctl == 'open' || ctl == ''
+    outline.OpenOutlineWindow(cmdmods, winsize)
+    g:LspRequestDocSymbols()
+  elseif ctl == 'close'
+    outline.CloseOutlineWindow()
+  elseif ctl == 'toggle'
+    if outline.ToggleOutlineWindow(cmdmods, winsize)
+      g:LspRequestDocSymbols()
+    endif
+  endif
+enddef
+
+# Command-line completion for the ":LspOutline" command
+export def LspOutlineComplete(arglead: string, cmdline: string, cursorPos: number): list<string>
+  var l = ['open', 'close', 'toggle']
+  return filter(l, (_, val) => val =~ $'^{arglead}')
+enddef
+
+# show all the symbols in a file in a popup menu
+export def ShowDocSymbols()
+  var fname: string = @%
+  if fname->empty()
+    return
+  endif
+
+  var lspserver: dict<any> = buf.CurbufGetServerChecked('documentSymbol')
+  if lspserver->empty() || !lspserver.running || !lspserver.ready
+    return
+  endif
+
+  lspserver.getDocSymbols(fname, false)
+enddef
+
+# Format a range of lines in a file
+# If a language server supporting range formatting is not found and
+# 'canFallback' is true then use builtin formatting.
+def DocRangeFormat(fname: string, line1: number, line2: number, canFallback: bool)
+  var lspserver: dict<any> = buf.BufLspServerGet(bufnr(), 'documentRangeFormatting')
+  if !lspserver->empty()
+    lspserver.textDocFormat(fname, true, line1, line2)
+    return
+  endif
+
+  if canFallback
+    util.WarnMsg('Formatting unsupported; falling back to built-in.')
+    execute $'keepjumps normal! {line1}Ggq{line2}G'
+  elseif !&filetype->empty()
+    util.ErrMsg($'Language server for "{&filetype}" file type supporting "documentRangeFormatting" feature is not found')
+  else
+    util.ErrMsg('No language server supporting "documentRangeFormatting" feature is found')
+  endif
+enddef
+
+# Format the entire file.
+# If a language server supporting range formatting is not found and
+# 'canFallback' is true then use builtin formatting.
+def DocFormat(fname: string, canFallback: bool)
+  var lspserver: dict<any> = buf.BufLspServerGet(bufnr(), 'documentFormatting')
+  if !lspserver->empty()
+    lspserver.textDocFormat(fname, false, 0, 0)
+    return
+  endif
+
+  if canFallback
+    util.WarnMsg('Formatting unsupported; falling back to built-in.')
+    execute 'keepjumps normal! 1GgqG'
+  elseif !&filetype->empty()
+    util.ErrMsg($'Language server for "{&filetype}" file type supporting "documentFormatting" feature is not found')
+  # else
+    # util.ErrMsg('No language server supporting "documentFormatting" feature is found')
+  endif
+enddef
+
+# If 'range_args' is false, then format the entire file.  Otherwise format a
+# range of lines.
+export def TextDocFormat(range_args: number, line1: number, line2: number)
+  if !&modifiable
+    util.ErrMsg('Current file is not a modifiable file')
+    return
+  endif
+
+  var fname: string = @%
+  const canFallback = opt.lspOptions.formatFallback &&
+					&formatexpr !=# 'lsp#lsp#FormatExpr()'
+  if range_args > 0
+    DocRangeFormat(fname, line1, line2, canFallback)
+  else
+    DocFormat(fname, canFallback)
+  endif
+enddef
+
+# Support for textDocument/onTypeFormatting is implemented in
+# autoload/lsp/ontypeformat.vim (opt-in via the 'onTypeFormatting' option).
+
+# Display all the locations where the current symbol is called from.
+# Uses LSP "callHierarchy/incomingCalls" request
+export def IncomingCalls()
+  var lspserver: dict<any> = buf.CurbufGetServerChecked('callHierarchy')
+  if lspserver->empty()
+    return
+  endif
+
+  lspserver.incomingCalls(@%)
+enddef
+
+# Display all the symbols used by the current symbol.
+# Uses LSP "callHierarchy/outgoingCalls" request
+export def OutgoingCalls()
+  var lspserver: dict<any> = buf.CurbufGetServerChecked('callHierarchy')
+  if lspserver->empty()
+    return
+  endif
+
+  lspserver.outgoingCalls(@%)
+enddef
+
+# Display the type hierarchy for the current symbol.  Direction is 0 for
+# sub types and 1 for super types.
+export def TypeHierarchy(direction: number)
+  var lspserver: dict<any> = buf.CurbufGetServerChecked('typeHierarchy')
+  if lspserver->empty()
+    return
+  endif
+
+  lspserver.typeHierarchy(direction)
+enddef
+
+# Rename a symbol
+# Uses LSP "textDocument/rename" request
+export def Rename(a_newName: string)
+  var lspserver: dict<any> = buf.CurbufGetServerChecked('rename')
+  if lspserver->empty()
+    return
+  endif
+
+  var newName: string = a_newName
+  if newName->empty()
+    var sym: string = expand('<cword>')
+    newName = input($"Rename symbol '{sym}' to: ", sym)
+    if newName->empty()
+      return
+    endif
+
+    # clear the input prompt
+    :echo "\r"
+  endif
+
+  lspserver.renameSymbol(newName)
+enddef
+
+# Perform a code action
+# Uses LSP "textDocument/codeAction" request
+def CurbufGetCodeActionServersChecked(): list<dict<any>>
+  return codeaction.CurbufGetCodeActionServersChecked()
+enddef
+
+export def CodeAction(line1: number, line2: number, query: string)
+  var lspservers = CurbufGetCodeActionServersChecked()
+  if lspservers->empty()
+    return
+  endif
+
+  var fname: string = @%
+  var bnr = bufnr()
+  # Shared mutable aggregation state captured by all async callbacks.
+  var state = {
+    bnr: bnr,
+    pending: lspservers->len(),
+    selectorQuery: '',
+    actions: []
+  }
+
+  for lspserver in lspservers
+    # Fan out requests in parallel; callback merges replies into shared state.
+    lspserver.codeActionAsync(fname, line1, line2, query,
+	function(codeaction.CodeActionReply, [state]))
+  endfor
+enddef
+
+export def AutoFix(line1: number = 0, line2: number = 0)
+  var lspservers = CurbufGetCodeActionServersChecked()
+  if lspservers->empty()
+    return
+  endif
+
+  var fname: string = @%
+  var bnr = bufnr()
+  # Default to current line if no range is given
+  var start = line1 > 0 ? line1 : line('.')
+  var end_ = line2 > 0 ? line2 : line('.')
+
+  # Collect all diagnostics strictly within the range
+  var allDiags = diag.GetDiagsForBuf(bnr)
+  var rangeDiags = []
+  for d in allDiags
+    var dline = d.range.start.line + 1
+    if dline >= start && dline <= end_
+      rangeDiags->add(d)
+    endif
+  endfor
+  # Sort by line descending (bottom to top)
+  rangeDiags->sort((a, b) => b.range.start.line - a.range.start.line)
+
+  if rangeDiags->empty()
+    util.WarnMsg('No diagnostics found in the selected range')
+    return
+  endif
+
+  # Setup state for diagnostic processing
+  var state = {
+    servers: lspservers,
+    fname: fname,
+    bnr: bnr,
+    errorOccurred: false
+  }
+
+  # Start processing diagnostics from the first one.
+  # Per-diagnostic pending/action aggregation is initialized in
+  # codeaction.AutoFixProcessDiag().
+  codeaction.AutoFixProcessDiag(rangeDiags, 0, state)
+enddef
+
+# Perform a source code action for the whole file.
+export def SourceCodeAction(kind: string, queryArg: string)
+  # Reuse the generic selector syntax so this command stays aligned with
+  # :LspCodeAction filtering semantics.
+  var query = $'only:{kind}'
+  var selector = queryArg->trim()
+  if selector == ''
+    # Match historical behavior: default to the first filtered action.
+    selector = '1'
+  endif
+  query ..= $'#{selector}'
+
+  CodeAction(1, line('$'), query)
+enddef
+
+# Code lens
+# Uses LSP "textDocument/codeLens" request
+export def CodeLens()
+  var lspserver: dict<any> = buf.CurbufGetServerChecked('codeLens')
+  if lspserver->empty()
+    return
+  endif
+
+  lspserver.codeLens(@%)
+enddef
+
+# Perform a workspace wide symbol lookup
+# Uses LSP "workspace/symbol" request
+export def SymbolSearch(queryArg: string, cmdmods: string)
+  var lspserver: dict<any> = buf.CurbufGetServerChecked('workspaceSymbol')
+  if lspserver->empty()
+    return
+  endif
+
+  var query: string = queryArg
+  if query->empty()
+    query = input('Lookup symbol: ', expand('<cword>'))
+    if query->empty()
+      return
+    endif
+  endif
+  :redraw!
+
+  lspserver.workspaceQuery(query, true, cmdmods)
+enddef
+
+# Display the list of workspace folders
+export def ListWorkspaceFolders()
+  var lspservers: list<dict<any>> = buf.CurbufGetServers()
+  for lspserver in lspservers
+    util.InfoMsg($'Workspace Folders: "{lspserver.name}" {lspserver.workspaceFolders->string()}')
+  endfor
+enddef
+
+# Add a workspace folder. Default is to use the current folder.
+export def AddWorkspaceFolder(dirArg: string)
+  var dirName: string = dirArg
+  if dirName->empty()
+    dirName = input('Add Workspace Folder: ', getcwd(), 'dir')
+    if dirName->empty()
+      return
+    endif
+  endif
+  :redraw!
+  if !dirName->isdirectory()
+    util.ErrMsg($'{dirName} is not a directory')
+    return
+  endif
+
+  var lspservers: list<dict<any>> = buf.CurbufGetServers()
+
+  for lspserver in lspservers
+    lspserver.addWorkspaceFolder(dirName)
+  endfor
+enddef
+
+# Remove a workspace folder. Default is to use the current folder.
+export def RemoveWorkspaceFolder(dirArg: string)
+  var dirName: string = dirArg
+  if dirName->empty()
+    dirName = input('Remove Workspace Folder: ', getcwd(), 'dir')
+    if dirName->empty()
+      return
+    endif
+  endif
+  :redraw!
+  if !dirName->isdirectory()
+    util.ErrMsg($'{dirName} is not a directory')
+    return
+  endif
+
+  var lspservers: list<dict<any>> = buf.CurbufGetServers()
+  for lspserver in lspservers
+    lspserver.removeWorkspaceFolder(dirName)
+  endfor
+enddef
+
+# expand the previous selection or start a new selection
+export def SelectionExpand()
+  var lspserver: dict<any> = buf.CurbufGetServerChecked('selectionRange')
+  if lspserver->empty()
+    return
+  endif
+
+  lspserver.selectionExpand()
+enddef
+
+# shrink the previous selection or start a new selection
+export def SelectionShrink()
+  var lspserver: dict<any> = buf.CurbufGetServerChecked('selectionRange')
+  if lspserver->empty()
+    return
+  endif
+
+  lspserver.selectionShrink()
+enddef
+
+# fold the entire document
+export def FoldDocument()
+  var lspserver: dict<any> = buf.CurbufGetServerChecked('foldingRange')
+  if lspserver->empty()
+    return
+  endif
+
+  if &foldmethod != 'manual'
+    util.ErrMsg("Only works when 'foldmethod' is 'manual'")
+    return
+  endif
+
+  var fname: string = @%
+  lspserver.foldRange(fname)
+enddef
+
+# Enable diagnostic highlighting for all the buffers
+export def DiagHighlightEnable()
+  diag.DiagsHighlightEnable()
+enddef
+
+# Disable diagnostic highlighting for all the buffers
+export def DiagHighlightDisable()
+  diag.DiagsHighlightDisable()
+enddef
+
+# Function to use with the 'tagfunc' option.
+export def TagFunc(pat: string, flags: string, info: dict<any>): any
+  var lspserver: dict<any> = buf.CurbufGetServerChecked('definition')
+  if lspserver->empty()
+    return v:null
+  endif
+
+  return lspserver.tagFunc(pat, flags, info)
+enddef
+
+# Function to use with the 'formatexpr' option.
+export def FormatExpr(): number
+  var lspserver: dict<any> = buf.CurbufGetServerChecked('documentRangeFormatting')
+  if lspserver->empty()
+    return 1
+  endif
+
+  if ['i', 'R', 'ic', 'ix']->index(mode()) != -1
+    # When 'formatexpr' is called in insert mode to format a line exceeding
+    # 'textwidth', use internal formatting.
+    return 1
+  endif
+
+  lspserver.textDocFormat(@%, true, v:lnum, v:lnum + v:count - 1)
+  return 0
+enddef
+
+export def RegisterCmdHandler(cmd: string, Handler: func)
+  codeaction.RegisterCmdHandler(cmd, Handler)
+enddef
+
+# Command-line completion for the ":LspServer <cmd>" and ":LspDiag <cmd>" sub
+# commands
+def LspSubCmdComplete(cmds: list<string>, arglead: string, cmdline: string, cursorPos: number): list<string>
+  var wordBegin = cmdline->match('\s\+\zs\S', cursorPos)
+  if wordBegin == -1
+    return cmds
+  endif
+
+  # Make sure there are no additional sub-commands. This keeps completion
+  # strict for one-level command grammars such as ":LspServer show ...".
+  var wordEnd = cmdline->stridx(' ', wordBegin)
+  if wordEnd == -1
+    return cmds->filter((_, val) => val =~ $'^{arglead}')
+  endif
+
+  return []
+enddef
+
+# Command-line completion for the ":LspDiag highlight" command
+def LspDiagHighlightComplete(arglead: string, cmdline: string, cursorPos: number): list<string>
+  return LspSubCmdComplete(['enable', 'disable', 'toggle'], arglead, cmdline, cursorPos)
+enddef
+
+# Command-line completion for the ":LspDiag" command
+export def LspDiagComplete(arglead: string, cmdline: string, cursorPos: number): list<string>
+  var wordBegin = -1
+  var wordEnd = -1
+  var l = ['first', 'current', 'here', 'highlight', 'last', 'next', 'nextWrap',
+           'prev', 'prevWrap', 'show']
+
+  # Skip the command name
+  var i = cmdline->stridx(' ', 0)
+  wordBegin = cmdline->match('\s\+\zs\S', i)
+  if wordBegin == -1
+    return l
+  endif
+
+  wordEnd = cmdline->stridx(' ', wordBegin)
+  if wordEnd == -1
+    return filter(l, (_, val) => val =~ $'^{arglead}')
+  endif
+
+  var cmd = cmdline->strpart(wordBegin, wordEnd - wordBegin)
+  if cmd == 'highlight'
+    return LspDiagHighlightComplete(arglead, cmdline, wordEnd)
+  endif
+
+  return []
+enddef
+
+# ":LspDiag" command handler
+export def LspDiagCmd(args: string, cmdCount: number, force: bool)
+  # Keep explicit string dispatch for predictable CLI behavior and messages.
+  if args->stridx('highlight') == 0
+    if args[9] == ' '
+      var subcmd = args[10 : ]->trim()
+      if subcmd == 'enable'
+	diag.DiagsHighlightEnable()
+      elseif subcmd == 'disable'
+	diag.DiagsHighlightDisable()
+      elseif subcmd == 'toggle'
+	diag.DiagsHighlightToggle()
+      else
+	util.ErrMsg($':LspDiag highlight - Unsupported argument "{subcmd}"')
+      endif
+    else
+      util.ErrMsg('Argument required for ":LspDiag highlight"')
+    endif
+  elseif args == 'first'
+    diag.LspDiagsJump('first', 0)
+  elseif args == 'current'
+    LspShowCurrentDiag(force)
+  elseif args == 'here'
+    diag.LspDiagsJump('here', 0)
+  elseif args == 'last'
+    diag.LspDiagsJump('last', 0)
+  elseif args == 'next'
+    diag.LspDiagsJump('next', cmdCount)
+  elseif args == 'nextWrap'
+    diag.LspDiagsJump('nextWrap', cmdCount)
+  elseif args == 'prev'
+    diag.LspDiagsJump('prev', cmdCount)
+  elseif args == 'prevWrap'
+    diag.LspDiagsJump('prevWrap', cmdCount)
+  elseif args == 'show'
+    ShowDiagnostics()
+  else
+    util.ErrMsg($':LspDiag - Unsupported argument "{args}"')
+  endif
+enddef
+
+# Command-line completion for the ":LspServer debug" command
+def LspServerDebugComplete(arglead: string, cmdline: string, cursorPos: number): list<string>
+  return LspSubCmdComplete(['errors', 'messages', 'off', 'on'], arglead,
+			   cmdline, cursorPos)
+enddef
+
+# Command-line completion for the ":LspServer show" command
+def LspServerShowComplete(arglead: string, cmdline: string, cursorPos: number): list<string>
+  return LspSubCmdComplete(['capabilities', 'initializeRequest', 'messages',
+			    'status'], arglead, cmdline, cursorPos)
+enddef
+
+# Command-line completion for the ":LspServer trace" command
+def LspServerTraceComplete(arglead: string, cmdline: string, cursorPos: number): list<string>
+  return LspSubCmdComplete(['messages', 'off', 'verbose'], arglead, cmdline,
+			   cursorPos)
+enddef
+
+# Command-line completion for the ":LspServer" command
+export def LspServerComplete(arglead: string, cmdline: string, cursorPos: number): list<string>
+  var wordBegin = -1
+  var wordEnd = -1
+  var l = ['debug', 'restart', 'show', 'trace', 'stop', 'start']
+
+  # Skip the command name
+  var i = cmdline->stridx(' ', 0)
+  wordBegin = cmdline->match('\s\+\zs\S', i)
+  if wordBegin == -1
+    return l
+  endif
+
+  wordEnd = cmdline->stridx(' ', wordBegin)
+  if wordEnd == -1
+    return filter(l, (_, val) => val =~ $'^{arglead}')
+  endif
+
+  var cmd = cmdline->strpart(wordBegin, wordEnd - wordBegin)
+  if cmd == 'debug'
+    return LspServerDebugComplete(arglead, cmdline, wordEnd)
+  elseif cmd == 'show'
+    return LspServerShowComplete(arglead, cmdline, wordEnd)
+  elseif cmd == 'trace'
+    return LspServerTraceComplete(arglead, cmdline, wordEnd)
+  endif
+
+  return []
+enddef
+
+# ":LspServer" command handler
+export def LspServerCmd(args: string)
+  if args->stridx('debug') == 0
+    if args[5] == ' '
+      var subcmd = args[6 : ]->trim()
+      ServerDebug(subcmd)
+    else
+      util.ErrMsg('Argument required for ":LspServer debug"')
+    endif
+  elseif args == 'restart'
+    RestartServer()
+  elseif args->stridx('show') == 0
+    if args[4] == ' '
+      var subcmd = args[5 : ]->trim()
+      ShowServer(subcmd)
+    else
+      util.ErrMsg('Argument required for ":LspServer show"')
+    endif
+  elseif args->stridx('start') == 0
+    StartServerByUser()
+  elseif args->stridx('stop') == 0
+    StopServerByUser()
+  elseif args->stridx('trace') == 0
+    if args[5] == ' '
+      var subcmd = args[6 : ]->trim()
+      ServerTraceSet(subcmd)
+    else
+      util.ErrMsg('Argument required for ":LspServer trace"')
+    endif
+  else
+    util.ErrMsg($'LspServer - Unsupported argument "{args}"')
+  endif
+enddef
+
+# vim: tabstop=8 shiftwidth=2 softtabstop=2 noexpandtab
+
+# Downstream: container family lifecycle. Inserted into the pinned LSP module.
+var vimConfigFamilySwitching = false
+var vimConfigFamilyClosing: dict<bool> = {}
+
+def VimConfigJobAlive(server: dict<any>): bool
+  return type(server.job) == v:t_job && job_status(server.job) == 'run'
+enddef
+
+def VimConfigUniqueServers(): list<dict<any>>
+  var seen: dict<bool> = {}
+  var result: list<dict<any>> = []
+  for servers in ftypeServerMap->values()
+    for server in servers
+      var key = string(server.id)
+      if !seen->has_key(key)
+        seen[key] = true
+        result->add(server)
+      endif
+    endfor
+  endfor
+  return result
+enddef
+
+def VimConfigShutdownReply(server: dict<any>, result: any, error: dict<any>)
+  try
+    server.exitServer()
+  catch
+    # A concurrent clean exit can close the channel between these messages.
+  endtry
+  try
+    server.vimConfigInputClosed = true
+    ch_close_in(job_getchannel(server.job))
+  catch
+    # Closing stdin after exit is graceful EOF, including a concurrent exit.
+  endtry
+enddef
+
+def VimConfigShutdownForJob(stoppingJob: job, server: dict<any>, result: any, error: dict<any>)
+  # A late response from a retired channel must never stop a new instance.
+  if server.job == stoppingJob && job_status(stoppingJob) == 'run'
+    VimConfigShutdownReply(server, result, error)
+  endif
+enddef
+
+def VimConfigGracefulStop(server: dict<any>)
+  var key = string(server.id)
+  if !VimConfigJobAlive(server)
+    server.running = false
+    server.ready = false
+    if vimConfigFamilyClosing->has_key(key)
+      vimConfigFamilyClosing->remove(key)
+    endif
+    return
+  endif
+  if vimConfigFamilyClosing->has_key(key)
+    return
+  endif
+  vimConfigFamilyClosing[key] = true
+  # Detach without writing or unloading buffers. didOpen on reactivation uses
+  # the current in-memory contents, including all unsaved changes.
+  for info in getbufinfo()
+    if buf.BufLspServersGet(info.bufnr)->copy()->filter((_, item) => item.id == server.id)->len() > 0
+      RemoveFile(info.bufnr)
+    endif
+  endfor
+  try
+    # Keep processing server requests while awaiting shutdown. In particular,
+    # PHP can await workDoneProgress/create replies during initial indexing.
+    server.rpc_a('shutdown', v:null, function(VimConfigShutdownForJob, [server.job]))
+  catch
+    # A failed request does not justify force-terminating a live family.
+  endtry
+enddef
+
+def VimConfigStopped(server: dict<any>)
+  if server.diagnosticPullTimer != -1
+    timer_stop(server.diagnosticPullTimer)
+    server.diagnosticPullTimer = -1
+  endif
+  server.pendingPullBufnrs = {}
+  server.running = false
+  server.ready = false
+enddef
+
+def VimConfigPhpTerm(server: dict<any>): bool
+  # The bundled PHP indexer is one process with worker threads. Its stdio
+  # shutdown can acknowledge and then hang. Only this known launcher may use
+  # the normal upstream TERM fallback; never force-kill or overlap families.
+  if server.name != 'php' || server.path != get(g:, 'vimconfig_root', '') .. '/bin/language-server'
+      || get(server.args, 0, '') != 'php' || get(server, 'vimConfigPhpTermSent', false)
+    return false
+  endif
+  server.vimConfigPhpTermSent = true
+  VimConfigShutdownReply(server, v:null, {})
+  return job_stop(server.job, 'term')
+enddef
+
+def VimConfigReattachFamily(bnr: number, desired: list<dict<any>>)
+  if get(g:, 'vimconfig_profile', '') != 'container' || bnr != bufnr()
+    return
+  endif
+  var wanted = desired->copy()->map((_, server) => server.id)
+  for info in getbufinfo({'bufloaded': 1})
+    if info.bufnr == bnr
+      continue
+    endif
+    var servers = ftypeServerMap->get(getbufvar(info.bufnr, '&filetype'), [])
+    if !servers->empty() && wanted->index(servers[0].id) >= 0
+      AddFile(info.bufnr)
+    endif
+  endfor
+enddef
+
+def VimConfigSelectFamily(bnr: number, desired: list<dict<any>>): bool
+  if get(g:, 'vimconfig_profile', '') != 'container'
+    return true
+  endif
+  if vimConfigFamilySwitching
+    return false
+  endif
+  # Hidden-buffer events must not switch the user's active language family.
+  if bnr != bufnr()
+    var current = ftypeServerMap->get(&filetype, [])
+    return !desired->empty() && desired[0]->get('id', -1) == get(get(current, 0, {}), 'id', -2)
+  endif
+  var wanted = desired->copy()->map((_, server) => server.id)
+  var servers = VimConfigUniqueServers()
+  for server in servers
+    var key = string(server.id)
+    if !VimConfigJobAlive(server) && vimConfigFamilyClosing->has_key(key)
+      vimConfigFamilyClosing->remove(key)
+    endif
+  endfor
+  var old = servers->filter((_, server) => (wanted->index(server.id) < 0 || vimConfigFamilyClosing->has_key(string(server.id))) && VimConfigJobAlive(server))
+  if old->empty()
+    return true
+  endif
+  vimConfigFamilySwitching = true
+  try
+    for server in old
+      VimConfigGracefulStop(server)
+    endfor
+    var started = reltime()
+    while old->copy()->filter((_, server) => VimConfigJobAlive(server))->len() > 0
+      if reltimefloat(reltime(started)) >= get(g:, 'vimconfig_family_stop_timeout', 2.0)
+        var signaled = false
+        for server in old
+          if VimConfigJobAlive(server) && VimConfigPhpTerm(server)
+            signaled = true
+          endif
+        endfor
+        if signaled
+          started = reltime()
+          continue
+        endif
+        util.WarnMsg('Previous language server is still stopping; this family was not started. Re-enter the buffer to retry.')
+        return false
+      endif
+      sleep 10m
+    endwhile
+    for server in old
+      VimConfigStopped(server)
+      var key = string(server.id)
+      if vimConfigFamilyClosing->has_key(key)
+        vimConfigFamilyClosing->remove(key)
+      endif
+    endfor
+    return true
+  finally
+    vimConfigFamilySwitching = false
+  endtry
+  return false
+enddef
+
+export def VimConfigContainerStop(server: dict<any>): bool
+  VimConfigGracefulStop(server)
+  var started = reltime()
+  while VimConfigJobAlive(server)
+    if reltimefloat(reltime(started)) >= get(g:, 'vimconfig_family_stop_timeout', 2.0)
+      if VimConfigPhpTerm(server)
+        started = reltime()
+        continue
+      endif
+      return false
+    endif
+    sleep 10m
+  endwhile
+  VimConfigStopped(server)
+  var key = string(server.id)
+  if vimConfigFamilyClosing->has_key(key)
+    vimConfigFamilyClosing->remove(key)
+  endif
+  return true
+enddef

@@ -1,0 +1,182 @@
+[
+  {
+    "crate": "anes-0.1.6",
+    "repository": "https://github.com/zrzka/anes-rs",
+    "revision": "378ac7461ecac29fde9e10df7b08359d1315a9ad",
+    "notice_files": [
+      "phpantom-upstream/zrzka-anes-rs-378ac7461ecac29fde9e10df7b08359d1315a9ad/LICENSE-APACHE",
+      "phpantom-upstream/zrzka-anes-rs-378ac7461ecac29fde9e10df7b08359d1315a9ad/LICENSE-MIT"
+    ]
+  },
+  {
+    "crate": "mago-allocator-1.47.5",
+    "repository": "https://github.com/carthage-software/mago",
+    "revision": "3d6c87dccaa74b4048b90e208abe7f2832114f2e",
+    "notice_files": [
+      "phpantom-upstream/carthage-software-mago-3d6c87dccaa74b4048b90e208abe7f2832114f2e/LICENSE-APACHE",
+      "phpantom-upstream/carthage-software-mago-3d6c87dccaa74b4048b90e208abe7f2832114f2e/LICENSE-MIT",
+      "phpantom-upstream/carthage-software-mago-3d6c87dccaa74b4048b90e208abe7f2832114f2e/crates/twig-syntax/tests/fixtures/FIXTURES-LICENSE",
+      "phpantom-upstream/carthage-software-mago-3d6c87dccaa74b4048b90e208abe7f2832114f2e/crates/twig-syntax/tests/fixtures/UPSTREAM-LICENSE"
+    ]
+  },
+  {
+    "crate": "mago-bytes-1.47.5",
+    "repository": "https://github.com/carthage-software/mago",
+    "revision": "3d6c87dccaa74b4048b90e208abe7f2832114f2e",
+    "notice_files": [
+      "phpantom-upstream/carthage-software-mago-3d6c87dccaa74b4048b90e208abe7f2832114f2e/LICENSE-APACHE",
+      "phpantom-upstream/carthage-software-mago-3d6c87dccaa74b4048b90e208abe7f2832114f2e/LICENSE-MIT",
+      "phpantom-upstream/carthage-software-mago-3d6c87dccaa74b4048b90e208abe7f2832114f2e/crates/twig-syntax/tests/fixtures/FIXTURES-LICENSE",
+      "phpantom-upstream/carthage-software-mago-3d6c87dccaa74b4048b90e208abe7f2832114f2e/crates/twig-syntax/tests/fixtures/UPSTREAM-LICENSE"
+    ]
+  },
+  {
+    "crate": "mago-composer-1.47.5",
+    "repository": "https://github.com/carthage-software/mago",
+    "revision": "3d6c87dccaa74b4048b90e208abe7f2832114f2e",
+    "notice_files": [
+      "phpantom-upstream/carthage-software-mago-3d6c87dccaa74b4048b90e208abe7f2832114f2e/LICENSE-APACHE",
+      "phpantom-upstream/carthage-software-mago-3d6c87dccaa74b4048b90e208abe7f2832114f2e/LICENSE-MIT",
+      "phpantom-upstream/carthage-software-mago-3d6c87dccaa74b4048b90e208abe7f2832114f2e/crates/twig-syntax/tests/fixtures/FIXTURES-LICENSE",
+      "phpantom-upstream/carthage-software-mago-3d6c87dccaa74b4048b90e208abe7f2832114f2e/crates/twig-syntax/tests/fixtures/UPSTREAM-LICENSE"
+    ]
+  },
+  {
+    "crate": "mago-database-1.47.5",
+    "repository": "https://github.com/carthage-software/mago",
+    "revision": "3d6c87dccaa74b4048b90e208abe7f2832114f2e",
+    "notice_files": [
+      "phpantom-upstream/carthage-software-mago-3d6c87dccaa74b4048b90e208abe7f2832114f2e/LICENSE-APACHE",
+      "phpantom-upstream/carthage-software-mago-3d6c87dccaa74b4048b90e208abe7f2832114f2e/LICENSE-MIT",
+      "phpantom-upstream/carthage-software-mago-3d6c87dccaa74b4048b90e208abe7f2832114f2e/crates/twig-syntax/tests/fixtures/FIXTURES-LICENSE",
+      "phpantom-upstream/carthage-software-mago-3d6c87dccaa74b4048b90e208abe7f2832114f2e/crates/twig-syntax/tests/fixtures/UPSTREAM-LICENSE"
+    ]
+  },
+  {
+    "crate": "mago-formatter-1.47.5",
+    "repository": "https://github.com/carthage-software/mago",
+    "revision": "3d6c87dccaa74b4048b90e208abe7f2832114f2e",
+    "notice_files": [
+      "phpantom-upstream/carthage-software-mago-3d6c87dccaa74b4048b90e208abe7f2832114f2e/LICENSE-APACHE",
+      "phpantom-upstream/carthage-software-mago-3d6c87dccaa74b4048b90e208abe7f2832114f2e/LICENSE-MIT",
+      "phpantom-upstream/carthage-software-mago-3d6c87dccaa74b4048b90e208abe7f2832114f2e/crates/twig-syntax/tests/fixtures/FIXTURES-LICENSE",
+      "phpantom-upstream/carthage-software-mago-3d6c87dccaa74b4048b90e208abe7f2832114f2e/crates/twig-syntax/tests/fixtures/UPSTREAM-LICENSE"
+    ]
+  },
+  {
+    "crate": "mago-names-1.47.5",
+    "repository": "https://github.com/carthage-software/mago",
+    "revision": "3d6c87dccaa74b4048b90e208abe7f2832114f2e",
+    "notice_files": [
+      "phpantom-upstream/carthage-software-mago-3d6c87dccaa74b4048b90e208abe7f2832114f2e/LICENSE-APACHE",
+      "phpantom-upstream/carthage-software-mago-3d6c87dccaa74b4048b90e208abe7f2832114f2e/LICENSE-MIT",
+      "phpantom-upstream/carthage-software-mago-3d6c87dccaa74b4048b90e208abe7f2832114f2e/crates/twig-syntax/tests/fixtures/FIXTURES-LICENSE",
+      "phpantom-upstream/carthage-software-mago-3d6c87dccaa74b4048b90e208abe7f2832114f2e/crates/twig-syntax/tests/fixtures/UPSTREAM-LICENSE"
+    ]
+  },
+  {
+    "crate": "mago-php-version-1.47.5",
+    "repository": "https://github.com/carthage-software/mago",
+    "revision": "3d6c87dccaa74b4048b90e208abe7f2832114f2e",
+    "notice_files": [
+      "phpantom-upstream/carthage-software-mago-3d6c87dccaa74b4048b90e208abe7f2832114f2e/LICENSE-APACHE",
+      "phpantom-upstream/carthage-software-mago-3d6c87dccaa74b4048b90e208abe7f2832114f2e/LICENSE-MIT",
+      "phpantom-upstream/carthage-software-mago-3d6c87dccaa74b4048b90e208abe7f2832114f2e/crates/twig-syntax/tests/fixtures/FIXTURES-LICENSE",
+      "phpantom-upstream/carthage-software-mago-3d6c87dccaa74b4048b90e208abe7f2832114f2e/crates/twig-syntax/tests/fixtures/UPSTREAM-LICENSE"
+    ]
+  },
+  {
+    "crate": "mago-phpdoc-syntax-1.47.5",
+    "repository": "https://github.com/carthage-software/mago",
+    "revision": "3d6c87dccaa74b4048b90e208abe7f2832114f2e",
+    "notice_files": [
+      "phpantom-upstream/carthage-software-mago-3d6c87dccaa74b4048b90e208abe7f2832114f2e/LICENSE-APACHE",
+      "phpantom-upstream/carthage-software-mago-3d6c87dccaa74b4048b90e208abe7f2832114f2e/LICENSE-MIT",
+      "phpantom-upstream/carthage-software-mago-3d6c87dccaa74b4048b90e208abe7f2832114f2e/crates/twig-syntax/tests/fixtures/FIXTURES-LICENSE",
+      "phpantom-upstream/carthage-software-mago-3d6c87dccaa74b4048b90e208abe7f2832114f2e/crates/twig-syntax/tests/fixtures/UPSTREAM-LICENSE"
+    ]
+  },
+  {
+    "crate": "mago-reporting-1.47.5",
+    "repository": "https://github.com/carthage-software/mago",
+    "revision": "3d6c87dccaa74b4048b90e208abe7f2832114f2e",
+    "notice_files": [
+      "phpantom-upstream/carthage-software-mago-3d6c87dccaa74b4048b90e208abe7f2832114f2e/LICENSE-APACHE",
+      "phpantom-upstream/carthage-software-mago-3d6c87dccaa74b4048b90e208abe7f2832114f2e/LICENSE-MIT",
+      "phpantom-upstream/carthage-software-mago-3d6c87dccaa74b4048b90e208abe7f2832114f2e/crates/twig-syntax/tests/fixtures/FIXTURES-LICENSE",
+      "phpantom-upstream/carthage-software-mago-3d6c87dccaa74b4048b90e208abe7f2832114f2e/crates/twig-syntax/tests/fixtures/UPSTREAM-LICENSE"
+    ]
+  },
+  {
+    "crate": "mago-span-1.47.5",
+    "repository": "https://github.com/carthage-software/mago",
+    "revision": "3d6c87dccaa74b4048b90e208abe7f2832114f2e",
+    "notice_files": [
+      "phpantom-upstream/carthage-software-mago-3d6c87dccaa74b4048b90e208abe7f2832114f2e/LICENSE-APACHE",
+      "phpantom-upstream/carthage-software-mago-3d6c87dccaa74b4048b90e208abe7f2832114f2e/LICENSE-MIT",
+      "phpantom-upstream/carthage-software-mago-3d6c87dccaa74b4048b90e208abe7f2832114f2e/crates/twig-syntax/tests/fixtures/FIXTURES-LICENSE",
+      "phpantom-upstream/carthage-software-mago-3d6c87dccaa74b4048b90e208abe7f2832114f2e/crates/twig-syntax/tests/fixtures/UPSTREAM-LICENSE"
+    ]
+  },
+  {
+    "crate": "mago-syntax-1.47.5",
+    "repository": "https://github.com/carthage-software/mago",
+    "revision": "3d6c87dccaa74b4048b90e208abe7f2832114f2e",
+    "notice_files": [
+      "phpantom-upstream/carthage-software-mago-3d6c87dccaa74b4048b90e208abe7f2832114f2e/LICENSE-APACHE",
+      "phpantom-upstream/carthage-software-mago-3d6c87dccaa74b4048b90e208abe7f2832114f2e/LICENSE-MIT",
+      "phpantom-upstream/carthage-software-mago-3d6c87dccaa74b4048b90e208abe7f2832114f2e/crates/twig-syntax/tests/fixtures/FIXTURES-LICENSE",
+      "phpantom-upstream/carthage-software-mago-3d6c87dccaa74b4048b90e208abe7f2832114f2e/crates/twig-syntax/tests/fixtures/UPSTREAM-LICENSE"
+    ]
+  },
+  {
+    "crate": "mago-syntax-core-1.47.5",
+    "repository": "https://github.com/carthage-software/mago",
+    "revision": "3d6c87dccaa74b4048b90e208abe7f2832114f2e",
+    "notice_files": [
+      "phpantom-upstream/carthage-software-mago-3d6c87dccaa74b4048b90e208abe7f2832114f2e/LICENSE-APACHE",
+      "phpantom-upstream/carthage-software-mago-3d6c87dccaa74b4048b90e208abe7f2832114f2e/LICENSE-MIT",
+      "phpantom-upstream/carthage-software-mago-3d6c87dccaa74b4048b90e208abe7f2832114f2e/crates/twig-syntax/tests/fixtures/FIXTURES-LICENSE",
+      "phpantom-upstream/carthage-software-mago-3d6c87dccaa74b4048b90e208abe7f2832114f2e/crates/twig-syntax/tests/fixtures/UPSTREAM-LICENSE"
+    ]
+  },
+  {
+    "crate": "mago-text-edit-1.47.5",
+    "repository": "https://github.com/carthage-software/mago",
+    "revision": "3d6c87dccaa74b4048b90e208abe7f2832114f2e",
+    "notice_files": [
+      "phpantom-upstream/carthage-software-mago-3d6c87dccaa74b4048b90e208abe7f2832114f2e/LICENSE-APACHE",
+      "phpantom-upstream/carthage-software-mago-3d6c87dccaa74b4048b90e208abe7f2832114f2e/LICENSE-MIT",
+      "phpantom-upstream/carthage-software-mago-3d6c87dccaa74b4048b90e208abe7f2832114f2e/crates/twig-syntax/tests/fixtures/FIXTURES-LICENSE",
+      "phpantom-upstream/carthage-software-mago-3d6c87dccaa74b4048b90e208abe7f2832114f2e/crates/twig-syntax/tests/fixtures/UPSTREAM-LICENSE"
+    ]
+  },
+  {
+    "crate": "mago-word-1.47.5",
+    "repository": "https://github.com/carthage-software/mago",
+    "revision": "3d6c87dccaa74b4048b90e208abe7f2832114f2e",
+    "notice_files": [
+      "phpantom-upstream/carthage-software-mago-3d6c87dccaa74b4048b90e208abe7f2832114f2e/LICENSE-APACHE",
+      "phpantom-upstream/carthage-software-mago-3d6c87dccaa74b4048b90e208abe7f2832114f2e/LICENSE-MIT",
+      "phpantom-upstream/carthage-software-mago-3d6c87dccaa74b4048b90e208abe7f2832114f2e/crates/twig-syntax/tests/fixtures/FIXTURES-LICENSE",
+      "phpantom-upstream/carthage-software-mago-3d6c87dccaa74b4048b90e208abe7f2832114f2e/crates/twig-syntax/tests/fixtures/UPSTREAM-LICENSE"
+    ]
+  },
+  {
+    "crate": "tower-lsp-macros-0.9.0",
+    "repository": "https://github.com/ebkalderon/tower-lsp",
+    "revision": "7b580128faa39b907db8f40bc53924181887acde",
+    "notice_files": [
+      "phpantom-upstream/ebkalderon-tower-lsp-7b580128faa39b907db8f40bc53924181887acde/LICENSE-APACHE",
+      "phpantom-upstream/ebkalderon-tower-lsp-7b580128faa39b907db8f40bc53924181887acde/LICENSE-MIT"
+    ]
+  },
+  {
+    "crate": "valuable-0.1.1",
+    "repository": "https://github.com/tokio-rs/valuable",
+    "revision": "9efc29b6e58cef28f6566a47aa7e142a55fead77",
+    "notice_files": [
+      "phpantom-upstream/tokio-rs-valuable-9efc29b6e58cef28f6566a47aa7e142a55fead77/LICENSE"
+    ]
+  }
+]
