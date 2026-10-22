@@ -41,7 +41,11 @@ function! s:context() abort
 endfunction
 
 function! s:git() abort
-  return ['git', '--no-pager', '-c', 'core.fsmonitor=false', '-c', 'core.untrackedCache=false']
+  let argv = ['git', '--no-pager', '-c', 'core.fsmonitor=false', '-c', 'core.untrackedCache=false']
+  if vimconfig#profile() ==# 'container'
+    let argv += ['-c', 'index.threads=1', '-c', 'pack.threads=1', '-c', 'gc.auto=0', '-c', 'maintenance.auto=false']
+  endif
+  return argv
 endfunction
 
 function! s:append(buf, text) abort

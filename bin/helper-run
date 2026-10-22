@@ -26,6 +26,11 @@ case "$profile" in
             printf '%s\n' 'helper-run: hard exclusions require sandbox profile; helper was not started.' >&2
             exit 69
         fi
+        if [ "$profile" = container ]; then
+            resource_root=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd -P)
+            . "$resource_root/libexec/resource-env.sh"
+            vim_config_set_resources "$profile"
+        fi
         exec "$@"
         ;;
     sandbox) ;;

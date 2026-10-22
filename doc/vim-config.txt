@@ -48,6 +48,21 @@ The bundled gopls has a compatibility patch for missing /proc/self/exe. Its
 cache still hashes the binary contents. Close Vim before updating tools; pull
 the checkout, re-run bin/setup for your profile, and restart Vim.
 
+The container profile reduces worker pools, serializes Go commands and builds,
+and uses one semantic TypeScript server. Its supplied Linux launcher selects one
+permitted CPU before starting a server. The prebuilt Linux PHP server limits
+Tokio to one async worker and four blocking workers. Only one language family
+stays active; changing languages shuts down the previous family first. Switching
+back can require indexing again; unsaved buffers are restored from Vim memory.
+PHP has a timed TERM fallback for a stalled shutdown; the next family waits for
+confirmed exit. Re-enter the buffer to retry other lingering servers. Other
+profiles keep their normal concurrency.
+
+GOMAXPROCS is not an OS-thread cap; GOMEMLIMIT is a soft target. The session's
+process/thread allowance includes your shell, Vim and all helpers. Run the
+doctor with Vim closed and other jobs idle. Container Go uses a private
+telemetry-off configuration on Linux and the standard package driver.
+
 README.md has detailed deployment, exclusions, tool licences and limitations.
 VALIDATION.md records measured tests and distinguishes local/VM/real-host results.
 

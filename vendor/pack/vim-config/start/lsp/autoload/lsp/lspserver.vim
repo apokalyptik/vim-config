@@ -35,6 +35,10 @@ const LSP_ERROR_SERVER_CANCELLED = -32802
 # LSP server standard output handler
 # LSP responses from server handled by channel job in LSP mode
 def Output_cb(lspserver: dict<any>, chan: channel, msg: any): void
+  # Downstream: ignore retired-family output after graceful stdin EOF.
+  if get(lspserver, 'vimConfigInputClosed', false)
+    return
+  endif
   if lspserver.debug
     if msg->has_key('id')
       lspserver.traceLog($'Got request {msg->json_encode()}')
@@ -83,6 +87,8 @@ def StartServer(lspserver: dict<any>, bnr: number): number
 		exit_cb: function(Exit_cb, [lspserver])}
 
   lspserver.data = ''
+  lspserver.vimConfigInputClosed = false
+  lspserver.vimConfigPhpTermSent = false
   lspserver.caps = {}
   lspserver.omniCompletePending = false
   lspserver.completionLazyDoc = false
@@ -275,6 +281,10 @@ enddef
 
 # Stop a LSP server
 def StopServer(lspserver: dict<any>): number
+  # Downstream: no job_stop fallback while container children may be alive.
+  if get(g:, 'vimconfig_profile', '') == 'container' && exists('*g:VimConfigLspStopFamily')
+    return g:VimConfigLspStopFamily(lspserver) ? 0 : 1
+  endif
   if !lspserver.running
     util.WarnMsg($'LSP server {lspserver.name} is not running')
     return 0
@@ -399,6 +409,10 @@ enddef
 def SendNotification(lspserver: dict<any>, method: string, params: any = {})
   var notif: dict<any> = CreateNotification(lspserver, method)
   notif.params->extend(params)
+  # Downstream: exit has void params; PHPantom expects them omitted.
+  if method == 'exit'
+    notif->remove('params')
+  endif
   lspserver.sendMessage(notif)
 enddef
 
@@ -551,6 +565,10 @@ def AsyncRpc(lspserver: dict<any>, method: string, params: any, Cbfunc: func): n
     method: method,
     params: params
   }
+  # Downstream: PHPantom expects shutdown to omit optional params entirely.
+  if method == 'shutdown'
+    req->remove('params')
+  endif
 
   var job = lspserver.job
   if job->job_status() != 'run'

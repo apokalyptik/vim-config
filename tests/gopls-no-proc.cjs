@@ -8,21 +8,27 @@ const path = require('node:path');
 const { spawn } = require('node:child_process');
 const { pathToFileURL, fileURLToPath } = require('node:url');
 
-const workspace = '/home/tester/gopls-no-proc';
+const workspace = process.env.VIM_QEMU_GOPLS_WORKSPACE || '/home/tester/gopls-no-proc';
 const patched = '/opt/vim-tools/bin/gopls';
 const upstream = '/opt/vim-tools/bin/gopls-upstream';
 const launcher = '/opt/vim-config/bin/language-server';
 const sdk = '/opt/vim-tools/go';
 const deadline = Number(process.env.VIM_QEMU_GOPLS_TIMEOUT || 180) * 1000;
+const roots = [workspace];
+for (let index = 2; index <= Number(process.env.VIM_QEMU_GOPLS_ROOTS || 1); index++) roots.push(path.join(workspace, `module-${index}`));
 
 class Client {
-  constructor(command, args, environment) {
+  constructor(command, args, environment, cwd = workspace) {
     this.buffer = Buffer.alloc(0);
     this.stderr = '';
     this.pending = new Map();
     this.nextId = 1;
     this.closed = false;
-    this.child = spawn(command, args, { cwd: workspace, env: environment, stdio: ['pipe', 'pipe', 'pipe'] });
+    if (process.env.VIM_QEMU_GOPLS_RESOURCE_EVENTS === '1') {
+      this.child = spawn('/bin/sh', ['-c', 'kill -STOP "$$"; exec "$@"', 'go-resource-fixture', command, ...args],
+        { cwd, env: environment, stdio: ['pipe', 'pipe', 'pipe'] });
+      console.log(`GOPLS_RESOURCE_CHILD_PID=${this.child.pid}`);
+    } else this.child = spawn(command, args, { cwd, env: environment, stdio: ['pipe', 'pipe', 'pipe'] });
     this.child.stdin.on('error', () => {});
     this.child.stdout.on('data', chunk => this.output(chunk));
     this.child.stderr.on('data', chunk => { this.stderr = (this.stderr + chunk.toString()).slice(0, 16384); });
@@ -106,13 +112,30 @@ function environment(name, fallback, throughLauncher = false) {
     XDG_CACHE_HOME: path.join(fixture, 'cache'), GOCACHE: path.join(workspace, 'go-build-cache'),
     GOPLSCACHE: path.join(fixture, 'gopls-cache'), GOPATH: path.join(fixture, 'gopath'),
     GOMODCACHE: path.join(fixture, 'gomodcache'), GOENV: 'off', GOTOOLCHAIN: 'local',
-    GOPROXY: 'off', GOSUMDB: 'off', CGO_ENABLED: '0', GOMAXPROCS: '2',
+    GOPROXY: 'off', GOSUMDB: 'off', CGO_ENABLED: '0',
     VIM_CONFIG_PROFILE: 'container', VIM_CONFIG_DENY_PATHS: '',
     PATH: throughLauncher ? '/usr/bin:/bin' : `${sdk}/bin:/usr/bin:/bin`,
   };
   // The positive case deliberately relies on the real launcher to set GOROOT
   // and the exact fallback binary. Direct negative cases isolate hash failure.
-  if (throughLauncher) delete env.GOROOT; else env.GOROOT = sdk;
+  if (throughLauncher) {
+    delete env.GOROOT;
+    delete env.GOMAXPROCS;
+    delete env.GOFLAGS;
+    delete env.GOMEMLIMIT;
+  } else {
+    env.GOROOT = sdk;
+    if (process.env.VIM_QEMU_GOPLS_RAW === '1') {
+      delete env.GOMAXPROCS;
+      delete env.GOMEMLIMIT;
+      env.GOFLAGS = '-mod=readonly';
+    } else {
+      env.GOMAXPROCS = '1';
+      env.GOFLAGS = '-p=1 -mod=readonly';
+      env.GOMEMLIMIT = '256MiB';
+      env.VIM_CONFIG_LOW_RESOURCE = '1';
+    }
+  }
   if (fallback === undefined) delete env.VIM_CONFIG_GOPLS_EXECUTABLE;
   else env.VIM_CONFIG_GOPLS_EXECUTABLE = fallback;
   delete env.GOTELEMETRY;
@@ -124,7 +147,7 @@ function environment(name, fallback, throughLauncher = false) {
 
 function initialize(client) {
   return client.request('initialize', { processId: null,
-    rootUri: pathToFileURL(workspace).href, workspaceFolders: [{ uri: pathToFileURL(workspace).href, name: 'fixture' }],
+    rootUri: pathToFileURL(workspace).href, workspaceFolders: roots.map((folder, index) => ({ uri: pathToFileURL(folder).href, name: `fixture-${index}` })),
     capabilities: {}, initializationOptions: {},
   }, 20000);
 }
@@ -143,28 +166,31 @@ async function rejected(name, executable, fallback, requiredText) {
 }
 
 async function working() {
-  const env = environment('patched-wrapper', undefined, true);
-  const client = new Client(launcher, ['go'], env);
+  const direct = process.env.VIM_QEMU_GOPLS_EXECUTABLE;
+  const executable = direct || patched;
+  const env = environment('patched-wrapper', direct, !direct);
+  const client = new Client(direct || launcher, direct ? [] : ['go'], env);
   try {
     const initialized = await initialize(client);
     assert.ok(initialized.capabilities, 'launcher initialize capabilities');
     client.notify('initialized', {});
-    const document = path.join(workspace, 'probe.go');
-    client.notify('textDocument/didOpen', { textDocument: {
+    const documents = roots.map(folder => path.join(folder, 'probe.go'));
+    for (const document of documents) client.notify('textDocument/didOpen', { textDocument: {
       uri: pathToFileURL(document).href, languageId: 'go', version: 1, text: fs.readFileSync(document, 'utf8'),
     } });
-    const locations = await client.request('textDocument/definition', {
+    for (const locations of await Promise.all(documents.map(document => client.request('textDocument/definition', {
       textDocument: { uri: pathToFileURL(document).href }, position: { line: 2, character: 22 },
-    });
-    const entries = Array.isArray(locations) ? locations : [locations];
-    const definition = entries.find(item => /\/src\/fmt\/print\.go$/.test(item?.uri || item?.targetUri || ''));
-    assert.ok(definition, `stdlib definition: ${JSON.stringify(locations)}`);
-    assert.ok(fs.statSync(fileURLToPath(definition.uri || definition.targetUri)).isFile());
+    })))) {
+      const entries = Array.isArray(locations) ? locations : [locations];
+      const definition = entries.find(item => /\/src\/fmt\/print\.go$/.test(item?.uri || item?.targetUri || ''));
+      assert.ok(definition, `stdlib definition: ${JSON.stringify(locations)}`);
+      assert.ok(fs.statSync(fileURLToPath(definition.uri || definition.targetUri)).isFile());
+    }
     // The fallback must preserve content-addressed cache identity.
-    const digest = crypto.createHash('sha256').update(fs.readFileSync(patched)).digest();
+    const digest = crypto.createHash('sha256').update(fs.readFileSync(executable)).digest();
     const recorded = fs.readFileSync(path.join(env.GOPLSCACHE, 'gopls', digest.toString('hex').slice(0, 8), 'exe.sha256'));
     assert.ok(recorded.equals(digest), 'cache fingerprint must match patched executable bytes');
-    console.log('GOPLS_NO_PROC_WRAPPER_STDLIB_PASS');
+    console.log(direct ? 'GOPLS_NO_PROC_DIRECT_STDLIB_PASS' : 'GOPLS_NO_PROC_WRAPPER_STDLIB_PASS');
     console.log(`GOPLS_NO_PROC_CONTENT_HASH_PASS ${digest.toString('hex')}`);
     await client.request('shutdown', null, 3000);
     client.notify('exit', null);
@@ -174,20 +200,26 @@ async function working() {
 
 async function main() {
   assert.equal(process.getuid(), 1000);
+  if (process.env.VIM_QEMU_GOPLS_RESOURCE_EVENTS === '1') console.log(`GOPLS_RESOURCE_CLIENT_PID=${process.pid}`);
   assert.throws(() => fs.readlinkSync('/proc/self/exe'), { code: 'ENOENT' });
   console.log('GOPLS_NO_PROC_CONTROL_ENOENT');
-  fs.mkdirSync(workspace, { recursive: true });
-  fs.writeFileSync(path.join(workspace, 'go.mod'), 'module regression.invalid/probe\n\ngo 1.23\n');
-  fs.writeFileSync(path.join(workspace, 'probe.go'), 'package probe\nimport "fmt"\nfunc Example() { fmt.Println("fixture") }\n');
+  for (const [index, folder] of roots.entries()) {
+    fs.mkdirSync(folder, { recursive: true });
+    fs.writeFileSync(path.join(folder, 'go.mod'), `module regression.invalid/probe${index}\n\ngo 1.23\n`);
+    fs.writeFileSync(path.join(folder, 'probe.go'), 'package probe\nimport "fmt"\nfunc Example() { fmt.Println("fixture") }\n');
+  }
   const unreadable = path.join(workspace, 'unreadable-executable');
   fs.writeFileSync(unreadable, 'fixture');
   fs.chmodSync(unreadable, 0);
-  await rejected('upstream', upstream, upstream, /readlink \/proc\/self\/exe: no such file or directory/);
-  await rejected('missing-fallback', patched, undefined, /VIM_CONFIG_GOPLS_EXECUTABLE/);
-  await rejected('relative-fallback', patched, 'relative/gopls', /VIM_CONFIG_GOPLS_EXECUTABLE/);
-  await rejected('missing-file-fallback', patched, '/no-such-fixture-executable', /no-such-fixture-executable/);
-  await rejected('unreadable-fallback', patched, unreadable, /permission denied/);
+  if (process.env.VIM_QEMU_GOPLS_WORKING_ONLY !== '1') {
+    await rejected('upstream', upstream, upstream, /readlink \/proc\/self\/exe: no such file or directory/);
+    await rejected('missing-fallback', patched, undefined, /VIM_CONFIG_GOPLS_EXECUTABLE/);
+    await rejected('relative-fallback', patched, 'relative/gopls', /VIM_CONFIG_GOPLS_EXECUTABLE/);
+    await rejected('missing-file-fallback', patched, '/no-such-fixture-executable', /no-such-fixture-executable/);
+    await rejected('unreadable-fallback', patched, unreadable, /permission denied/);
+  }
   await working();
   console.log('VIM_GOPLS_NO_PROC_REGRESSION_PASS');
 }
-main().catch(error => { console.error(error.stack || error); process.exitCode = 1; });
+module.exports = { Client };
+if (require.main === module) main().catch(error => { console.error(error.stack || error); process.exitCode = 1; });

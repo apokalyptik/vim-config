@@ -9,6 +9,13 @@
 # VIM_CONFIG_QEMU_GOPLS_NO_PROC=1 adds an offline Go SDK/LSP regression with
 # /proc absent. Supply VIM_CONFIG_QEMU_GOPLS_BASELINE (upstream executable), and
 # optionally VIM_CONFIG_QEMU_GOPLS_PATCHED to test a build before repackaging.
+# VIM_CONFIG_QEMU_GOPLS_RESOURCES=1 also compares cold-cache Go process/thread
+# peaks; VIM_CONFIG_QEMU_GOPLS_RESOURCE_BASELINE must name the .1 patched build.
+# VIM_CONFIG_QEMU_ADDITIONAL_LSPS=1 adds PHP/TypeScript cold-workspace cases.
+# VIM_CONFIG_QEMU_RESOURCE_FAMILIES=typescript (or comma list) focuses reruns.
+# VIM_CONFIG_QEMU_RESOURCE_CURRENT_ONLY=1 skips historical baseline cases.
+# VIM_CONFIG_QEMU_PHP_PATCHED stages the approved low-resource PHP candidate
+# before its archive is repacked (fixture-only version marker is also created).
 # Test inputs are explicitly supplied, not host files.
 set -eu
 [ "$#" -eq 4 ] || { printf '%s\n' 'Usage: tests/qemu-helper.sh KERNEL BUSYBOX DEBIAN-PACKAGES-JSON DOWNLOADS-DIR' >&2; exit 64; }
@@ -53,37 +60,71 @@ if not (rootfs / 'bin/sh').exists():
     (rootfs / 'bin/sh').symlink_to('busybox')
 for relative in ['bin/helper-run', 'libexec/helper-run-inner']:
     shutil.copy2(repo / relative, rootfs / 'opt/vim-config' / relative)
-include_no_proc = os.environ.get('VIM_CONFIG_QEMU_GOPLS_NO_PROC') == '1'
+include_resources = os.environ.get('VIM_CONFIG_QEMU_GOPLS_RESOURCES') == '1'
+include_additional = include_resources and os.environ.get('VIM_CONFIG_QEMU_ADDITIONAL_LSPS') == '1'
+resource_families = os.environ.get('VIM_CONFIG_QEMU_RESOURCE_FAMILIES', '')
+resource_current_only = os.environ.get('VIM_CONFIG_QEMU_RESOURCE_CURRENT_ONLY') == '1'
+if any(name not in {'go', 'php', 'typescript'} for name in resource_families.split(',') if name):
+    raise SystemExit('Resource families must be a comma-separated subset of go,php,typescript')
+include_no_proc = os.environ.get('VIM_CONFIG_QEMU_GOPLS_NO_PROC') == '1' or include_resources
+run_original_no_proc = include_no_proc and not (include_resources and resource_current_only)
+needs_go_sdk = run_original_no_proc or (include_resources and (not resource_families or 'go' in resource_families.split(',')))
 include_payloads = os.environ.get('VIM_CONFIG_QEMU_PAYLOADS') == '1' or include_no_proc
 if include_payloads:
     manifest = json.loads((repo / 'tools/vendor-manifest.json').read_text())
     for payload in manifest['payloads']:
-        selected = payload['id'].startswith(('phpantom-', 'node-', 'gopls-')) or (include_no_proc and payload['id'].startswith('go1.'))
-        if payload['platform'] != 'linux-x86_64' or not selected:
+        shared = include_additional and payload['platform'] == 'all' and payload['id'] == 'javascript-language-servers'
+        selected = payload['id'].startswith(('phpantom-', 'node-', 'gopls-', 'affinity-exec-')) or (needs_go_sdk and payload['id'].startswith('go1.'))
+        if not shared and (payload['platform'] != 'linux-x86_64' or not selected):
             continue
         if len(payload['parts']) != 1:
             raise SystemExit('This fixture expects a single-part payload archive')
         archive = repo / payload['parts'][0]
         if hashlib.sha256(archive.read_bytes()).hexdigest() != payload['sha256']:
             raise SystemExit('Payload checksum mismatch: ' + payload['id'])
-        destination = rootfs / 'opt/vim-tools'
+        destination = rootfs / ('opt/vim-config/.state/tools/shared' if shared else 'opt/vim-tools')
         if payload['id'].startswith('phpantom-'):
             destination /= 'bin'
         destination.mkdir(parents=True, exist_ok=True)
         subprocess.run([tar, '-xf', str(archive), '-C', str(destination)], check=True)
+    php_candidate = os.environ.get('VIM_CONFIG_QEMU_PHP_PATCHED')
+    if php_candidate:
+        shutil.copy2(php_candidate, rootfs / 'opt/vim-tools/bin/phpantom_lsp')
+        (rootfs / 'opt/vim-tools/bin/phpantom-low-resource').write_text('0.11.1+vim-config.1\n')
 if include_no_proc:
     baseline = os.environ.get('VIM_CONFIG_QEMU_GOPLS_BASELINE')
-    if not baseline:
+    if run_original_no_proc and not baseline:
         raise SystemExit('VIM_CONFIG_QEMU_GOPLS_BASELINE must name an upstream Linux gopls executable')
-    shutil.copy2(baseline, rootfs / 'opt/vim-tools/bin/gopls-upstream')
+    if run_original_no_proc:
+        shutil.copy2(baseline, rootfs / 'opt/vim-tools/bin/gopls-upstream')
     candidate = os.environ.get('VIM_CONFIG_QEMU_GOPLS_PATCHED')
     if candidate:
         shutil.copy2(candidate, rootfs / 'opt/vim-tools/bin/gopls')
     shutil.copy2(repo / 'bin/language-server', rootfs / 'opt/vim-config/bin/language-server')
+    shutil.copy2(repo / 'libexec/resource-env.sh', rootfs / 'opt/vim-config/libexec/resource-env.sh')
+    lifecycle = repo / 'libexec/typescript-lifecycle.cjs'
+    if lifecycle.is_file():
+        shutil.copy2(lifecycle, rootfs / 'opt/vim-config/libexec/typescript-lifecycle.cjs')
     shutil.copy2(repo / 'tests/gopls-no-proc.cjs', rootfs / 'usr/bin/gopls-no-proc.cjs')
     tool_links = rootfs / 'opt/vim-config/.state/tools'
-    tool_links.mkdir(parents=True)
+    tool_links.mkdir(parents=True, exist_ok=True)
     (tool_links / 'linux-x86_64').symlink_to('/opt/vim-tools')
+if include_resources:
+    baseline = os.environ.get('VIM_CONFIG_QEMU_GOPLS_RESOURCE_BASELINE')
+    if not resource_current_only and not baseline:
+        raise SystemExit('VIM_CONFIG_QEMU_GOPLS_RESOURCE_BASELINE must name the .1 patched Linux executable')
+    if not resource_current_only:
+        shutil.copy2(baseline, rootfs / 'opt/vim-tools/bin/gopls-resource-v1')
+    shutil.copy2(repo / 'tests/gopls-resources.cjs', rootfs / 'usr/bin/gopls-resources.cjs')
+    (rootfs / 'sys/fs/cgroup').mkdir(parents=True, exist_ok=True)
+if include_additional:
+    for name in ['php-resources-client.cjs', 'node-resources-client.cjs']:
+        shutil.copy2(repo / 'tests' / name, rootfs / 'usr/bin' / name)
+    baseline_launcher = fixture / 'resource-baseline/language-server-env-only'
+    if not resource_current_only and not baseline_launcher.is_file():
+        raise SystemExit('Additional LSP comparison requires .state/qemu-helper/resource-baseline/language-server-env-only')
+    if not resource_current_only:
+        shutil.copy2(baseline_launcher, rootfs / 'opt/vim-config/bin/language-server-env-only')
 (rootfs / 'etc/passwd').write_text('root:x:0:0:root:/root:/bin/sh\ntester:x:1000:1000:tester:/home/tester:/bin/sh\n')
 (rootfs / 'etc/group').write_text('root:x:0:\ntester:x:1000:\n')
 (rootfs / 'home/tester/project/allowed.txt').write_text('ORIGINAL_TREE\n')
@@ -118,12 +159,19 @@ if test -x /usr/bin/strace; then
         printf 'FAIL_HELPER_NFS_FILE_TRACE\\n'
     fi
 fi
-if test -f /usr/bin/gopls-no-proc.cjs; then
+if test -f /usr/bin/gopls-no-proc.cjs && test RUN_ORIGINAL_NO_PROC_FLAG = 1; then
     /usr/bin/unshare --mount --fork --propagation private -- /bin/sh -c \\
         'umount /proc && /bin/busybox su -s /bin/sh tester -c /usr/bin/gopls-no-proc-tests'
 fi
+if test -x /opt/vim-tools/bin/affinity-exec; then
+    /bin/busybox su -s /bin/sh tester -c /usr/bin/affinity-tests
+fi
+if test -f /usr/bin/gopls-resources.cjs; then
+    mount -t cgroup2 cgroup2 /sys/fs/cgroup
+    VIM_QEMU_RESOURCE_CURRENT_ONLY=RESOURCE_CURRENT_ONLY_FLAG VIM_QEMU_RESOURCE_FAMILIES=RESOURCE_FAMILIES_FLAG VIM_QEMU_ADDITIONAL_LSPS=ADDITIONAL_LSPS_FLAG UV_THREADPOOL_SIZE=1 /opt/vim-tools/bin/node --v8-pool-size=1 /usr/bin/gopls-resources.cjs
+fi
 poweroff -f
-''')
+'''.replace('ADDITIONAL_LSPS_FLAG', '1' if include_additional else '0').replace('RESOURCE_FAMILIES_FLAG', resource_families).replace('RESOURCE_CURRENT_ONLY_FLAG', '1' if resource_current_only else '0').replace('RUN_ORIGINAL_NO_PROC_FLAG', '1' if run_original_no_proc else '0'))
 (rootfs / 'usr/bin/isolation-tests').write_text('''#!/bin/sh
 set -eu
 export PATH=/usr/bin:/bin
@@ -194,7 +242,35 @@ export PATH=/usr/bin:/bin
 test ! -e /proc/self/exe
 exec /opt/vim-tools/bin/node /usr/bin/gopls-no-proc.cjs
 ''')
-for relative in ['init', 'usr/bin/isolation-tests', 'usr/bin/payload-tests', 'usr/bin/gopls-no-proc-tests']:
+(rootfs / 'usr/bin/affinity-child-test').write_text('''#!/bin/sh
+set -eu
+cpus=$(sed -n 's/^Cpus_allowed_list:[[:space:]]*//p' /proc/self/status)
+case "$cpus" in *[!0-9]*) exit 1 ;; esac
+test -n "$cpus"
+printf 'AFFINITY_ONE_CPU_PASS %s\\n' "$cpus"
+''')
+(rootfs / 'usr/bin/affinity-tests').write_text('''#!/bin/sh
+set -eu
+helper=/opt/vim-tools/bin/affinity-exec
+"$helper" /bin/sh /usr/bin/affinity-child-test
+if grep -q '^Cpus_allowed_list:[[:space:]]*0-7$' /proc/self/status; then
+    test "$(/bin/busybox taskset -c 3 "$helper" /bin/sh /usr/bin/affinity-child-test)" = 'AFFINITY_ONE_CPU_PASS 3'
+    printf 'AFFINITY_INHERITED_NONZERO_CPU_PASS\\n'
+fi
+if test -x /usr/bin/strace; then
+    for call in sched_getaffinity sched_setaffinity; do
+        marker=/home/tester/affinity-unsafe-child-$call
+        if /usr/bin/strace -f -qq -o /tmp/affinity-inject-$call -e inject=$call:error=EPERM \\
+            "$helper" /bin/sh -c 'touch "$1"' affinity-test "$marker"; then
+            printf 'FAIL_AFFINITY_DENIAL_STARTED_CHILD\\n'; exit 1
+        fi
+        test ! -e "$marker"
+        printf 'AFFINITY_DENIAL_FAIL_CLOSED_PASS %s\\n' "$call"
+    done
+fi
+printf 'VIM_AFFINITY_REGRESSION_PASS\\n'
+''')
+for relative in ['init', 'usr/bin/isolation-tests', 'usr/bin/payload-tests', 'usr/bin/gopls-no-proc-tests', 'usr/bin/affinity-tests', 'usr/bin/affinity-child-test']:
     (rootfs / relative).chmod(0o755)
 
 # Write newc without requiring host root or creating host device nodes.
@@ -214,32 +290,40 @@ for path in sorted(rootfs.rglob('*')):
     relative = path.relative_to(rootfs).as_posix()
     info = path.lstat()
     data = os.readlink(path).encode() if path.is_symlink() else path.read_bytes() if path.is_file() else b''
-    owner = 1000 if relative == 'home/tester' or relative.startswith('home/tester/') else 0
+    owner = 1000 if relative == 'home/tester' or relative.startswith('home/tester/') or relative == 'opt/vim-config/.state' else 0
     entry(relative, info.st_mode, data, owner, owner)
 for name, major, minor in [('dev/console', 5, 1), ('dev/null', 1, 3), ('dev/tty', 5, 0)]:
     entry(name, stat.S_IFCHR | 0o666, major=major, minor=minor)
 entry('TRAILER!!!', 0)
 initrd = fixture / 'test-initramfs.cpio.gz'
-initrd.write_bytes(gzip.compress(archive, mtime=0))
+initrd.write_bytes(gzip.compress(archive, compresslevel=1 if include_no_proc else 9, mtime=0))
 command = [qemu, '-machine', 'q35,accel=tcg', '-cpu', 'qemu64,+rdrand,+rdseed',
-           '-m', '3072M' if include_no_proc else '1024M' if include_payloads else '512M',
-           '-smp', '2' if include_no_proc else '1', '-kernel', str(kernel), '-initrd', str(initrd),
+           '-m', '4096M' if include_resources else '3072M' if include_no_proc else '1024M' if include_payloads else '512M',
+           '-smp', '8' if include_resources else '2' if include_no_proc else '1', '-kernel', str(kernel), '-initrd', str(initrd),
            '-append', 'console=ttyS0 rdinit=/init loglevel=3 panic=1 random.trust_cpu=on',
            '-display', 'none', '-serial', 'stdio', '-monitor', 'none', '-no-reboot', '-nic', 'none']
-try:
-    result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=240 if include_no_proc else 90)
-except subprocess.TimeoutExpired as exc:
-    (fixture / 'test-console.log').write_bytes(exc.stdout or b'')
-    raise SystemExit('QEMU timeout; inspect .state/qemu-helper/test-console.log')
-(fixture / 'test-console.log').write_bytes(result.stdout)
-print(result.stdout.decode(errors='replace'))
-if b'VIM_HELPER_LINUX_INTEGRATION_PASS' not in result.stdout:
+console = fixture / 'test-console.log'
+with console.open('wb') as log:
+    guest = subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT)
+    try:
+        guest.wait(timeout=900 if include_resources else 240 if include_no_proc else 90)
+    except subprocess.TimeoutExpired:
+        guest.kill()
+        guest.wait()
+        raise SystemExit('QEMU timeout; inspect .state/qemu-helper/test-console.log')
+output = console.read_bytes()
+print(output.decode(errors='replace'))
+if b'VIM_HELPER_LINUX_INTEGRATION_PASS' not in output:
     raise SystemExit('Linux helper isolation test failed')
-if (rootfs / 'usr/bin/strace').exists() and b'VIM_HELPER_ZERO_TOUCH_AUDIT_PASS' not in result.stdout:
+if (rootfs / 'usr/bin/strace').exists() and b'VIM_HELPER_ZERO_TOUCH_AUDIT_PASS' not in output:
     raise SystemExit('Original /nfs path syscall audit failed')
-if include_payloads and b'VIM_HELPER_LINUX_PAYLOADS_PASS' not in result.stdout:
+if include_payloads and b'VIM_HELPER_LINUX_PAYLOADS_PASS' not in output:
     raise SystemExit('Linux payload startup check failed')
-if include_no_proc and b'VIM_GOPLS_NO_PROC_REGRESSION_PASS' not in result.stdout:
+if run_original_no_proc and b'VIM_GOPLS_NO_PROC_REGRESSION_PASS' not in output:
     raise SystemExit('Go no-/proc regression failed')
+if include_resources and b'VIM_GOPLS_RESOURCE_REGRESSION_PASS' not in output:
+    raise SystemExit('Go process/thread resource regression failed')
+if (rootfs / 'opt/vim-tools/bin/affinity-exec').exists() and b'VIM_AFFINITY_REGRESSION_PASS' not in output:
+    raise SystemExit('Affinity selection/fail-closed regression failed')
 print('PASS: real Linux namespace/mask/proc/capability tests; fixture mount is tmpfs, not an NFS server')
 PY

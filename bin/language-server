@@ -16,9 +16,21 @@ export PATH="$runtime/go/bin:$runtime/bin:$PATH"
 export GOTOOLCHAIN=local GOPROXY=off GOSUMDB=off
 # Module dependencies must already exist in the project/vendor or its cache.
 export GOFLAGS="${GOFLAGS-} -mod=readonly"
+. "$config_root/libexec/resource-env.sh"
+vim_config_set_resources "$profile"
 case "$server" in
-    php) set -- "$runtime/bin/phpantom_lsp" "$@" ;;
+    php)
+        if [ "$profile:$platform" = container:linux-x86_64 ] && [ ! -f "$runtime/bin/phpantom-low-resource" ]; then
+            printf '%s\n' 'vim-config: update the container PHP tools with bin/setup --profile container before starting PHP IDE support.' >&2
+            exit 69
+        fi
+        set -- "$runtime/bin/phpantom_lsp" "$@"
+        ;;
     go)
+        if [ "$profile" = container ] && [ ! -f "$runtime/bin/gopls-low-resource" ]; then
+            printf '%s\n' 'vim-config: update the container Go tools with bin/setup --profile container before starting Go IDE support.' >&2
+            exit 69
+        fi
         # Relocated SDK discovery also needs an explicit root without procfs.
         export GOROOT="$runtime/go"
         # gopls can exit asynchronously if its persistent index is unwritable.
@@ -27,10 +39,38 @@ case "$server" in
         # The bundled compatibility patch hashes this file if procfs cannot
         # report the executable path. Keep this tied to the binary we execute.
         export VIM_CONFIG_GOPLS_EXECUTABLE="$runtime/bin/gopls"
+        if [ "$profile" = container ]; then
+            export GOPACKAGESDRIVER=off
+        fi
+        if [ "$profile:$platform" = container:linux-x86_64 ]; then
+            # Disable telemetry sidecars for this process tree, without changing
+            # the user's telemetry preference or their existing Go env file.
+            if [ "${GOENV+x}" != x ]; then
+                export GOENV="${XDG_CONFIG_HOME:-${HOME:?}/.config}/go/env"
+            fi
+            export XDG_CONFIG_HOME="$config_root/.state/container-config"
+            mkdir -p "$XDG_CONFIG_HOME/go/telemetry"
+            printf 'off\n' > "$XDG_CONFIG_HOME/go/telemetry/mode"
+        fi
         set -- "$runtime/bin/gopls" "$@"
         ;;
-    typescript) set -- "$runtime/bin/node" "$tools/shared/node_modules/typescript-language-server/lib/cli.mjs" --stdio "$@" ;;
+    typescript)
+        if [ "$profile" = container ]; then
+            set -- "$runtime/bin/node" --require "$config_root/libexec/typescript-lifecycle.cjs" "$tools/shared/node_modules/typescript-language-server/lib/cli.mjs" --stdio "$@"
+        else
+            set -- "$runtime/bin/node" "$tools/shared/node_modules/typescript-language-server/lib/cli.mjs" --stdio "$@"
+        fi
+        ;;
     html|css|json) set -- "$runtime/bin/node" "$tools/shared/node_modules/vscode-langservers-extracted/bin/vscode-$server-language-server" --stdio "$@" ;;
     *) printf 'vim-config: unknown language server: %s\n' "$server" >&2; exit 64 ;;
 esac
+if [ "$profile:$platform" = container:linux-x86_64 ]; then
+    if [ ! -x "$runtime/bin/affinity-exec" ]; then
+        printf '%s\n' 'vim-config: run bin/setup --profile container to install the container resource launcher.' >&2
+        exit 69
+    fi
+    # Narrow the inherited CPU set before runtime worker pools are created.
+    # The prebuilt launcher execs the server; it leaves no supervisor process.
+    set -- "$runtime/bin/affinity-exec" "$@"
+fi
 exec "$config_root/bin/helper-run" --profile "$profile" -- "$@"

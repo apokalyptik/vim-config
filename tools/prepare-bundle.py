@@ -12,6 +12,7 @@ import io
 import json
 import os
 from pathlib import Path
+import posixpath
 import re
 import shutil
 import subprocess
@@ -98,7 +99,7 @@ def download(url, target, expected=None):
     return target
 
 
-def extract(archive, destination, strip=0):
+def extract(archive, destination, strip=0, allow_internal_symlinks=False):
     destination.mkdir(parents=True, exist_ok=True)
     with tarfile.open(archive, 'r:*') as bundle:
         for member in bundle:
@@ -108,6 +109,12 @@ def extract(archive, destination, strip=0):
             if member.name.startswith('/') or '..' in parts:
                 raise RuntimeError('Unsafe archive path: ' + member.name)
             member.name = str(Path(*parts))
+            if member.issym() and allow_internal_symlinks:
+                target = posixpath.normpath(posixpath.join(posixpath.dirname(member.name), member.linkname))
+                if member.linkname.startswith('/') or target == '..' or target.startswith('../'):
+                    raise RuntimeError('Escaping archive symlink: ' + member.name)
+                bundle.extract(member, destination)
+                continue
             if member.issym() or member.islnk():
                 raise RuntimeError('Unexpected source archive link: ' + member.name)
             if member.isdir() or member.isfile():
@@ -307,8 +314,8 @@ def record_payloads(manifest, identifiers=None):
     write_payloads_tsv(manifest)
 
 
-def build_gopls(work, manifest, offline=False):
-    """Build only the patched Go server; never mutate the module source cache."""
+def go_preparation_environment(work, manifest, offline=False):
+    """Use the checked-in SDK and task-local caches, with telemetry disabled."""
     work.mkdir(parents=True, exist_ok=True)
     host = supported_host()
     sdk = next(p for p in manifest['payloads'] if p['platform'] == host and p['id'].startswith('go1.'))
@@ -318,10 +325,6 @@ def build_gopls(work, manifest, offline=False):
     host_go = work / 'go-host'
     extract(sdk_archive, host_go)
     go = str(host_go / 'go/bin/go')
-    config = manifest['gopls_build']
-    patcher = ROOT / config['patch_script']
-    if sha256(patcher) != config['patch_script_sha256']:
-        raise RuntimeError('gopls patch helper checksum mismatch')
     build_config = work / 'config'
     telemetry_mode = build_config / 'go/telemetry/mode'
     telemetry_mode.parent.mkdir(parents=True, exist_ok=True)
@@ -337,6 +340,37 @@ def build_gopls(work, manifest, offline=False):
         env.update(GOPROXY='off', GOSUMDB='off')
     if subprocess.check_output([go, 'env', 'GOTELEMETRY'], env=env, text=True).strip() != 'off':
         raise RuntimeError('Go preparation telemetry is not disabled')
+    return go, env
+
+
+def build_affinity_helper(work, manifest, offline=False):
+    config = manifest['affinity_exec_build']
+    source = ROOT / config['source_file']
+    if sha256(source) != config['source_sha256']:
+        raise RuntimeError('affinity-exec source checksum mismatch')
+    go, env = go_preparation_environment(work, manifest, offline)
+    env.update(GOOS='linux', GOARCH='amd64')
+    directory = work / 'affinity-build/linux-x86_64'
+    output = directory / 'bin/affinity-exec'
+    output.parent.mkdir(parents=True, exist_ok=True)
+    subprocess.run([go, 'build', *config['flags'], '-o', str(output), str(source)], env=env, check=True)
+    output.chmod(0o755)
+    notices = directory / 'licenses/affinity-exec'
+    notices.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(ROOT / 'tools/affinity-exec.LICENSE', notices / 'MIT.txt')
+    for name in ('LICENSE', 'PATENTS'):
+        shutil.copyfile(work / 'go-host/go' / name, notices / ('Go-' + name))
+    payload = next(p for p in manifest['payloads'] if p['id'] == config['payload_id'])
+    archive(directory, ROOT / payload['parts'][0])
+
+
+def build_gopls(work, manifest, offline=False):
+    """Build only the patched Go server; never mutate the module source cache."""
+    go, env = go_preparation_environment(work, manifest, offline)
+    config = manifest['gopls_build']
+    patcher = ROOT / config['patch_script']
+    if sha256(patcher) != config['patch_script_sha256']:
+        raise RuntimeError('gopls patch helper checksum mismatch')
     module = config['module'] + '@' + config['version']
     info = json.loads(subprocess.check_output([go, 'mod', 'download', '-json', module], env=env))
     if info['Sum'] != config['module_sum']:
@@ -355,18 +389,73 @@ def build_gopls(work, manifest, offline=False):
             directory.chmod(directory.stat().st_mode | 0o200)
     if sha256(source / config['source_file']) != config['source_file_sha256']:
         raise RuntimeError('gopls upstream file checksum mismatch')
-    subprocess.run([os.sys.executable, str(patcher), str(source)], check=True)
+    dependency = config['gocommand_dependency']
+    dependency_module = dependency['module'] + '@' + dependency['version']
+    dependency_info = json.loads(subprocess.check_output([go, 'mod', 'download', '-json', dependency_module], env=env))
+    if dependency_info['Sum'] != dependency['module_sum']:
+        raise RuntimeError('x/tools dependency module checksum changed')
+    dependency_file = Path(dependency_info['Dir']) / dependency['source_file']
+    if sha256(dependency_file) != dependency['source_file_sha256']:
+        raise RuntimeError('x/tools gocommand upstream file checksum mismatch')
+    dependency_source = work / 'gopls-tools-source'
+    if dependency_source.exists():
+        for directory in [dependency_source, *dependency_source.rglob('*')]:
+            if directory.is_dir() and not directory.is_symlink():
+                directory.chmod(directory.stat().st_mode | 0o200)
+        shutil.rmtree(dependency_source)
+    shutil.copytree(dependency_info['Dir'], dependency_source)
+    for directory in [dependency_source, *dependency_source.rglob('*')]:
+        if directory.is_dir() and not directory.is_symlink():
+            directory.chmod(directory.stat().st_mode | 0o200)
+    patched_dependency_file = dependency_source / dependency['source_file']
+    subprocess.run([os.sys.executable, str(patcher), str(source), '--gocommand-file', str(patched_dependency_file)], check=True)
     if sha256(source / config['source_file']) != config['patched_file_sha256']:
         raise RuntimeError('gopls patched file checksum mismatch')
+    if sha256(patched_dependency_file) != dependency['patched_file_sha256']:
+        raise RuntimeError('x/tools gocommand patched file checksum mismatch')
+    # Go deliberately refuses overlays beneath GOMODCACHE. Only this writable
+    # gopls source copy gets a replace directive pointing at the verified copy.
+    go_mod = source / 'go.mod'
+    go_mod.chmod(go_mod.stat().st_mode | 0o200)
+    subprocess.run([go, 'mod', 'edit', '-replace=' + dependency['module'] + '=' + str(dependency_source)], cwd=source, env=env, check=True)
     for osname, arch, platform in [('darwin', 'arm64', 'darwin-arm64'), ('linux', 'amd64', 'linux-x86_64')]:
         output = work / 'gopls-build' / platform / 'bin/gopls'
         output.parent.mkdir(parents=True, exist_ok=True)
         env.update(GOOS=osname, GOARCH=arch)
         subprocess.run([go, 'build', *config['flags'], '-o', str(output), '.'], cwd=source, env=env, check=True)
         output.chmod(0o755)
+        marker = output.parent / 'gopls-low-resource'
+        marker.write_text(config['output_version'] + '\n')
+        marker.chmod(0o644)
     for platform in ('darwin-arm64', 'linux-x86_64'):
         payload = next(p for p in manifest['payloads'] if p['platform'] == platform and p['id'].startswith('gopls-'))
         archive(work / 'gopls-build' / platform, ROOT / payload['parts'][0])
+
+
+def patch_javascript(directory, manifest):
+    config = manifest['typescript_shutdown_patch']
+    patcher = ROOT / config['patch_script']
+    if sha256(patcher) != config['patch_script_sha256']:
+        raise RuntimeError('TypeScript shutdown patch helper checksum mismatch')
+    target = directory / config['source_file']
+    subprocess.run([os.sys.executable, str(patcher), str(target)], check=True)
+    if sha256(target) != config['patched_file_sha256']:
+        raise RuntimeError('TypeScript shutdown patched file checksum mismatch')
+
+
+def rebuild_javascript(work, manifest):
+    """Repack the verified existing JS bundle; no npm, downloads or compiler."""
+    config = manifest['typescript_shutdown_patch']
+    payload = next(p for p in manifest['payloads'] if p['id'] == config['payload_id'])
+    source = ROOT / payload['parts'][0]
+    if sha256(source) != payload['sha256']:
+        raise RuntimeError('Existing JavaScript archive checksum mismatch')
+    directory = work / 'javascript-repack'
+    if directory.exists():
+        shutil.rmtree(directory)
+    extract(source, directory, allow_internal_symlinks=True)
+    patch_javascript(directory, manifest)
+    archive(directory, source)
 
 
 def rebuild(work, manifest):
@@ -411,8 +500,11 @@ def rebuild(work, manifest):
     env['NPM_CONFIG_CACHE'] = str(work / 'npm-cache')
     subprocess.run(['npm', 'ci', '--prefix', str(js), '--ignore-scripts', '--omit=dev', '--no-audit', '--no-fund'], env=env, check=True)
     shutil.rmtree(js / 'node_modules/.bin', ignore_errors=True)
+    patch_javascript(js, manifest)
     archive(js, ROOT / 'payloads/javascript-language-servers.tar.gz')
     build_gopls(work, manifest)
+    build_affinity_helper(work, manifest)
+    subprocess.run([os.sys.executable, str(ROOT / 'tools/build-phpantom.py'), '--work-dir', str(work / 'phpantom'), '--defer-manifest'], check=True)
     collect_licenses(work)
     record_payloads(manifest)
     print('Rebuilt offline payloads; review the manifest and archive changes before publication.')
@@ -425,6 +517,15 @@ def verify(manifest):
     patch = manifest['gopls_build']
     if sha256(ROOT / patch['patch_script']) != patch['patch_script_sha256']:
         raise RuntimeError('gopls patch helper checksum mismatch')
+    helper = manifest['affinity_exec_build']
+    if sha256(ROOT / helper['source_file']) != helper['source_sha256']:
+        raise RuntimeError('affinity-exec source checksum mismatch')
+    typescript = manifest['typescript_shutdown_patch']
+    if sha256(ROOT / typescript['patch_script']) != typescript['patch_script_sha256']:
+        raise RuntimeError('TypeScript shutdown patch helper checksum mismatch')
+    php = manifest['phpantom_build']
+    if sha256(ROOT / php['patch_script']) != php['patch_script_sha256'] or sha256(ROOT / php['build_script']) != php['build_script_sha256']:
+        raise RuntimeError('PHPantom preparation or patch helper checksum mismatch')
     total = 0
     for payload in manifest['payloads']:
         digest = hashlib.sha256()
@@ -452,13 +553,16 @@ def main():
     actions.add_argument('--verify', action='store_true')
     actions.add_argument('--rebuild', action='store_true')
     actions.add_argument('--rebuild-gopls', action='store_true', help='rebuild only the two patched gopls archives, leaving other payloads and Vim sources unchanged')
+    actions.add_argument('--rebuild-affinity', action='store_true', help='rebuild only the small Linux CPU-affinity launcher payload')
+    actions.add_argument('--rebuild-javascript', action='store_true', help='repack only the verified JavaScript archive with the pinned shutdown patch; no npm, downloads or compilation')
+    actions.add_argument('--rebuild-phpantom', action='store_true', help='prepare the patched static Linux PHP server using pinned Rust/Zig inputs on macOS arm64')
     actions.add_argument('--write-payloads-tsv', action='store_true', help='regenerate the Bash-readable payload table from the JSON manifest, without downloads')
     actions.add_argument('--collect-licenses', action='store_true', help=argparse.SUPPRESS)
     parser.add_argument('--work-dir', type=Path)
-    parser.add_argument('--offline', action='store_true', help='with --rebuild-gopls, use only the checked-in SDK and an already populated task-local Go module cache')
+    parser.add_argument('--offline', action='store_true', help='with a partial rebuild, use only checked-in payloads and prepared task-local caches')
     args = parser.parse_args()
-    if args.offline and not args.rebuild_gopls:
-        parser.error('--offline is supported only with --rebuild-gopls')
+    if args.offline and not (args.rebuild_gopls or args.rebuild_affinity or args.rebuild_javascript or args.rebuild_phpantom):
+        parser.error('--offline is supported only with a partial rebuild')
     manifest = json.loads(MANIFEST.read_text())
     payloads_tsv(manifest)  # Reject unsupported or unsafe rows before mutation.
     if args.write_payloads_tsv:
@@ -467,7 +571,19 @@ def main():
         verify(manifest)
     else:
         work = args.work_dir or Path(tempfile.mkdtemp(prefix='vim-config-bundle-'))
-        if args.rebuild_gopls:
+        if args.rebuild_phpantom:
+            subprocess.run([os.sys.executable, str(ROOT / 'tools/build-phpantom.py'), '--work-dir', str(work)] + (['--offline'] if args.offline else []), check=True)
+        elif args.rebuild_javascript:
+            rebuild_javascript(work, manifest)
+            record_payloads(manifest, {manifest['typescript_shutdown_patch']['payload_id']})
+            verify(manifest)
+            print('Repacked only the JavaScript archive with its pinned shutdown patch.')
+        elif args.rebuild_affinity:
+            build_affinity_helper(work, manifest, offline=args.offline)
+            record_payloads(manifest, {manifest['affinity_exec_build']['payload_id']})
+            verify(manifest)
+            print('Rebuilt only the Linux CPU-affinity launcher archive.')
+        elif args.rebuild_gopls:
             build_gopls(work, manifest, offline=args.offline)
             record_payloads(manifest, {p['id'] for p in manifest['payloads'] if p['id'].startswith('gopls-')})
             verify(manifest)

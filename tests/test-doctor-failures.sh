@@ -6,8 +6,10 @@ test_vim=${VIM_TEST_BIN:-vim}
 fixture=$(mktemp -d "${TMPDIR:-/tmp}/vim-doctor-failures.XXXXXXXX")
 fixture=$(CDPATH='' cd -- "$fixture" && pwd -P)
 trap 'rm -rf "$fixture"' EXIT HUP INT TERM
-mkdir -p "$fixture/root/bin" "$fixture/root/.state/tools/fixture/bin" "$fixture/root/.state/tools/fixture/go/bin"
+mkdir -p "$fixture/root/bin" "$fixture/root/libexec" "$fixture/root/.state/tools/fixture/bin" "$fixture/root/.state/tools/fixture/go/bin"
+: > "$fixture/root/.state/tools/fixture/bin/gopls-low-resource"
 cp "$test_root/bin/helper-run" "$fixture/root/bin/helper-run"
+cp "$test_root/libexec/resource-env.sh" "$fixture/root/libexec/resource-env.sh"
 cat > "$fixture/root/.state/tools/fixture/go/bin/go" <<'EOF'
 #!/bin/sh
 printf 'go fixture\n'
@@ -15,6 +17,7 @@ EOF
 cat > "$fixture/root/.state/tools/fixture/bin/gopls" <<'EOF'
 #!/usr/bin/env bash
 if [[ ${1-} == version ]]; then printf 'gopls fixture\n'; exit 0; fi
+if [[ -n ${TEST_DOCTOR_INIT_SENTINEL-} ]]; then : > "$TEST_DOCTOR_INIT_SENTINEL"; fi
 case "$TEST_DOCTOR_SCENARIO" in
     exited)
         printf 'fixture startup failed\n' >&2
@@ -104,4 +107,16 @@ grep -F 'limit 0.08s' "$fixture/silent/report" >/dev/null
 grep -F 'fixture verbose first line' "$fixture/verbose/report" >/dev/null
 grep -F 'stderr bytes omitted]' "$fixture/verbose/report" >/dev/null
 [[ $(wc -c < "$fixture/verbose/report") -lt 7000 ]]
+rm "$fixture/root/.state/tools/fixture/bin/gopls-low-resource"
+mkdir "$fixture/old-tools"
+if VIM_DOCTOR_ROOT="$fixture/root" VIM_DOCTOR_PLATFORM=fixture VIM_DOCTOR_MODE=lsp \
+    VIM_DOCTOR_PROFILE=container VIM_DOCTOR_TEMP="$fixture/old-tools" \
+    VIM_DOCTOR_SOURCE="$test_root/libexec/vim-config-doctor.vim" \
+    VIM_CONFIG_DENY_PATHS='' TEST_DOCTOR_SCENARIO=exited \
+    TEST_DOCTOR_INIT_SENTINEL="$fixture/old-tools/initialized" \
+    "$test_vim" -Nu NONE -i NONE -n -es -S "$fixture/driver.vim" > "$fixture/old-tools/vim.log" 2>&1; then
+    printf '%s\n' 'FAIL: doctor accepted legacy container Go tools' >&2; exit 1
+fi
+grep -F 'Container Go tools need the low-resource build' "$fixture/old-tools/report" >/dev/null
+[[ ! -e "$fixture/old-tools/initialized" ]] || { printf '%s\n' 'FAIL: legacy Go LSP initialized before readiness refusal' >&2; exit 1; }
 printf '%s\n' 'doctor failure tests: PASS (exit/stderr, error reply, post-initialize exit, malformed framing, signal, timeout, bounded readable trace)'

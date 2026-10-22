@@ -19,6 +19,8 @@ while [ "$#" -gt 0 ]; do
     esac
 done
 case "$doctor_profile" in container|sandbox|misc|laptop|wsl) ;; *) printf '%s\n' 'Unknown profile.' >&2; exit 64 ;; esac
+. "$doctor_root/libexec/resource-env.sh"
+vim_config_set_resources "$doctor_profile"
 case "$(uname -s):$(uname -m)" in
     Linux:x86_64|Linux:amd64) doctor_platform=linux-x86_64 ;;
     Darwin:arm64) doctor_platform=darwin-arm64 ;;
@@ -26,6 +28,9 @@ case "$(uname -s):$(uname -m)" in
 esac
 printf 'Vim configuration doctor: profile=%s platform=%s mode=%s\n' "$doctor_profile" "$doctor_platform" "$doctor_mode"
 printf 'Kernel: %s\n' "$(uname -sr)"
+if [ "$doctor_profile" = container ]; then
+    printf '%s\n' 'Container resources: GOMAXPROCS=1, Go build parallelism=1, serialized Go commands, reduced worker pools.'
+fi
 doctor_failed=0
 if command -v vim >/dev/null 2>&1; then
     doctor_vim_version=$(vim --version)

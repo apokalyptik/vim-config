@@ -7,7 +7,11 @@ let s:temp = tempname()
 call mkdir(s:temp . '/mock/autoload', 'p')
 let g:vimconfig_test_calls = []
 let g:vimconfig_test_denied = ''
+let g:vimconfig_test_profile = empty($VIM_CONFIG_PROFILE) ? 'misc' : $VIM_CONFIG_PROFILE
 call writefile([
+      \ 'function! vimconfig#profile() abort',
+      \ '  return g:vimconfig_test_profile',
+      \ 'endfunction',
       \ 'function! vimconfig#path_allowed(path) abort',
       \ '  return empty(g:vimconfig_test_denied) || stridx(a:path, g:vimconfig_test_denied) != 0',
       \ 'endfunction',
@@ -37,6 +41,8 @@ try
   call assert_equal('git', g:vimconfig_test_calls[-1].argv[0])
   call assert_equal(s:tree, g:vimconfig_test_calls[-1].opts.cwd)
   call assert_true(index(g:vimconfig_test_calls[-1].argv, '--untracked-files=normal') >= 0)
+  call assert_equal(g:vimconfig_test_profile ==# 'container', index(g:vimconfig_test_calls[-1].argv, 'index.threads=1') >= 0)
+  call assert_equal(g:vimconfig_test_profile ==# 'container', index(g:vimconfig_test_calls[-1].argv, 'maintenance.auto=false') >= 0)
   call assert_equal(v:t_func, type(g:vimconfig_test_calls[-1].opts.out_cb))
 
   " A scratch view retains the source repository and exact file argument.

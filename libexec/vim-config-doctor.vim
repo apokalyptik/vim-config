@@ -5,6 +5,9 @@ let s:failed = 0
 let s:root = $VIM_DOCTOR_ROOT
 let s:temp = $VIM_DOCTOR_TEMP
 let s:tools = s:root . '/.state/tools/' . $VIM_DOCTOR_PLATFORM
+let s:use_affinity = $VIM_DOCTOR_PROFILE ==# 'container' && $VIM_DOCTOR_PLATFORM ==# 'linux-x86_64'
+let s:go_resource_ready = $VIM_DOCTOR_PROFILE !=# 'container' || filereadable(s:tools . '/bin/gopls-low-resource')
+let s:php_resource_ready = !s:use_affinity || filereadable(s:tools . '/bin/phpantom-low-resource')
 " Tests can shorten a silent-server deadline without changing the real probe.
 let s:initialize_timeout = get(g:, 'vimconfig_doctor_initialize_timeout', 25)
 let s:env = {
@@ -18,6 +21,7 @@ let s:env = {
       \ 'VIM_CONFIG_GOPLS_EXECUTABLE': s:tools . '/bin/gopls',
       \ 'GOROOT': s:tools . '/go',
       \ 'GOTOOLCHAIN': 'local', 'GOPROXY': 'off', 'GOSUMDB': 'off',
+      \ 'GOPACKAGESDRIVER': 'off',
       \ 'PATH': s:tools . '/go/bin:' . s:tools . '/bin:' . $PATH,
       \ }
 " Go reads its telemetry mode file; GOTELEMETRY is a reported value, not a
@@ -95,7 +99,8 @@ endfunction
 
 function! s:Start(command) abort
   let l:state = {'buffer': '', 'stderr': '', 'stderr_bytes': 0, 'error': '', 'responses': {}, 'closed': 0}
-  let l:argv = [s:root . '/bin/helper-run', '--profile', $VIM_DOCTOR_PROFILE, '--'] + a:command
+  let l:command = s:use_affinity ? [s:tools . '/bin/affinity-exec'] + a:command : a:command
+  let l:argv = [s:root . '/bin/helper-run', '--profile', $VIM_DOCTOR_PROFILE, '--'] + l:command
   let l:state.job = job_start(l:argv, {'cwd': s:temp . '/project', 'env': s:env,
         \ 'in_mode': 'raw', 'out_mode': 'raw', 'err_mode': 'raw',
         \ 'out_cb': function('s:Output', [l:state]), 'err_cb': function('s:Error', [l:state]),
@@ -110,7 +115,16 @@ function! s:Stop(state) abort
   while job_status(a:state.job) ==# 'run' && reltimefloat(reltime(l:start)) < 1
     sleep 10m
   endwhile
-  if job_status(a:state.job) ==# 'run' | call job_stop(a:state.job, 'kill') | endif
+  if job_status(a:state.job) ==# 'run'
+    call job_stop(a:state.job, 'kill')
+    let l:start = reltime()
+    while job_status(a:state.job) ==# 'run' && reltimefloat(reltime(l:start)) < 1
+      sleep 10m
+    endwhile
+  endif
+  if job_status(a:state.job) ==# 'run'
+    throw 'Previous doctor server has not exited; refusing to start another probe'
+  endif
 endfunction
 
 function! s:Wait(state, id, seconds) abort
@@ -255,10 +269,10 @@ function! s:Lsp(label, command, language, file) abort
       return
     endif
     call s:Phase(l:state, 'shutdown')
-    call s:Send(l:state, {'jsonrpc': '2.0', 'id': 99, 'method': 'shutdown', 'params': v:null})
+    call s:Send(l:state, {'jsonrpc': '2.0', 'id': 99, 'method': 'shutdown'})
     call s:Wait(l:state, 99, 2)
     call s:Phase(l:state, 'exit notification')
-    call s:Send(l:state, {'jsonrpc': '2.0', 'method': 'exit', 'params': v:null})
+    call s:Send(l:state, {'jsonrpc': '2.0', 'method': 'exit'})
   catch
     let l:state.error = l:state.phase . ' failed: ' . v:exception
     if empty(get(l:state, 'wait', {}))
@@ -273,6 +287,9 @@ function! s:Lsp(label, command, language, file) abort
 endfunction
 
 try
+  if s:use_affinity && !executable(s:tools . '/bin/affinity-exec')
+    throw 'run bin/setup --profile container to install the container resource launcher'
+  endif
   if $VIM_DOCTOR_PROFILE ==# 'sandbox'
     " Check the real wrapper, fresh proc, capability drop, read-only empty mask.
     call s:Version('Sandbox namespace/mount/proc launcher', ['/bin/sh', '-c',
@@ -283,17 +300,22 @@ try
         \ ['Bundled Node', s:tools . '/bin/node', ['--eval', 'process.stdout.write(process.version + " JavaScript runtime ready\n")']],
         \ ['Bundled Go SDK', s:tools . '/go/bin/go', ['version']],
         \ ['Bundled gopls', s:tools . '/bin/gopls', ['version']]]
-    if executable(s:binary)
+    if s:label ==# 'Bundled PHPantom' && !s:php_resource_ready
+      call s:Log(0, 'Container PHP tools need the low-resource build; run bin/setup --profile container before the PHP probe.')
+    elseif executable(s:binary)
       call s:Version(s:label, [s:binary] + s:arguments)
     else
       call s:Log(0, s:label . ' is not staged; run bin/vim-config once to unpack the checked-in payloads')
     endif
   endfor
+  if !s:go_resource_ready
+    call s:Log(0, 'Container Go tools need the low-resource build; run bin/setup --profile container before the Go LSP probe.')
+  endif
   if $VIM_DOCTOR_MODE ==# 'lsp'
-    if executable(s:tools . '/bin/phpantom_lsp')
+    if s:php_resource_ready && executable(s:tools . '/bin/phpantom_lsp')
       call s:Lsp('PHPantom', [s:tools . '/bin/phpantom_lsp'], 'php', 'probe.php')
     endif
-    if executable(s:tools . '/bin/gopls') && executable(s:tools . '/go/bin/go')
+    if s:go_resource_ready && executable(s:tools . '/bin/gopls') && executable(s:tools . '/go/bin/go')
       call s:Lsp('gopls', [s:tools . '/bin/gopls'], 'go', 'probe.go')
     endif
   endif

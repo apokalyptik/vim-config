@@ -30,8 +30,8 @@
       "parts": [
         "payloads/gopls-v0.24.0-darwin-arm64.tar.gz"
       ],
-      "sha256": "79e39a5e40a7466c8846e584120b2f56262d6e00515fc467f92734bd02b7e7da",
-      "size_bytes": 11030427,
+      "sha256": "44dcec228cb661e7478fa9e01e318521242e8659730b069257d661eb3a802563",
+      "size_bytes": 11029511,
       "destination": "darwin-arm64",
       "strip_components": 0
     },
@@ -41,8 +41,8 @@
       "parts": [
         "payloads/gopls-v0.24.0-linux-x86_64.tar.gz"
       ],
-      "sha256": "3ace90689c233cf2d406e25a137756552801820cac7f987146488a50a7ed1ffb",
-      "size_bytes": 11730732,
+      "sha256": "210afca83bf72e6bc61c78ae0892428653993ca2acd24fe47c843bee66eef4cd",
+      "size_bytes": 11730735,
       "destination": "linux-x86_64",
       "strip_components": 0
     },
@@ -52,8 +52,8 @@
       "parts": [
         "payloads/javascript-language-servers.tar.gz"
       ],
-      "sha256": "a3f23f82658f1846fbe9d435fccdff1dd3e465351fa217566f2e92d90fb5aae1",
-      "size_bytes": 18901355,
+      "sha256": "bb7bc965ae46fa5a948cd4aed3dced70bdcd635911018d001b0664762bc3f7dd",
+      "size_bytes": 18901401,
       "destination": "shared",
       "strip_components": 0
     },
@@ -96,9 +96,20 @@
       "parts": [
         "payloads/phpantom-0.11.1-linux-x86_64.tar.gz"
       ],
-      "sha256": "906dd8104d4bf82aa1c4225fba297a90ff1cff0552df635ee858fc272f445fc6",
-      "size_bytes": 17410185,
+      "sha256": "464411950fcbcca8fb993afe62d3fa722d1f68c1f2938b0bc0dc83b37db0673b",
+      "size_bytes": 14794806,
       "destination": "linux-x86_64/bin",
+      "strip_components": 0
+    },
+    {
+      "id": "affinity-exec-v1-linux-x86_64",
+      "platform": "linux-x86_64",
+      "parts": [
+        "payloads/affinity-exec-v1-linux-x86_64.tar.gz"
+      ],
+      "sha256": "5069d3d3a427b50355a176ac60e6640088cd6263b8966c1ece7ebd532da41645",
+      "size_bytes": 692504,
+      "destination": "linux-x86_64",
       "strip_components": 0
     }
   ],
@@ -209,16 +220,34 @@
       "-mod=readonly",
       "-buildvcs=false",
       "-trimpath",
-      "-ldflags=-s -w -X main.version=v0.24.0+vim-config.1"
+      "-ldflags=-s -w -X main.version=v0.24.0+vim-config.2"
     ],
-    "command": "go build -mod=readonly -buildvcs=false -trimpath -ldflags=\"-s -w -X main.version=v0.24.0+vim-config.1\" -o OUTPUT .",
-    "output_version": "v0.24.0+vim-config.1",
+    "command": "go build -mod=readonly -buildvcs=false -trimpath -ldflags=\"-s -w -X main.version=v0.24.0+vim-config.2\" -o OUTPUT .",
+    "output_version": "v0.24.0+vim-config.2",
     "source_file": "internal/filecache/filecache.go",
     "source_file_sha256": "7ad9c9d8ca9ad0e7486bfdbf43068e73c7e34597ee5248f4f289e1aa7cfb2dea",
     "patched_file_sha256": "785d2f67784731c472b272c82099e3af9157516873aa978c4d26b004de962aa1",
     "patch_script": "tools/patch-gopls.py",
-    "patch_script_sha256": "7568cca1256df53f5ef0d2d51c50682bd3e31667ac58506d57878060dd68ce86",
-    "fallback_environment": "VIM_CONFIG_GOPLS_EXECUTABLE"
+    "patch_script_sha256": "4faf28fb9eae56affee695e485be0a11bb29cc8b4f8ecbf6763c8026aace1239",
+    "fallback_environment": "VIM_CONFIG_GOPLS_EXECUTABLE",
+    "gocommand_dependency": {
+      "module": "golang.org/x/tools",
+      "version": "v0.51.1-0.20261014163302-24a65270771e",
+      "revision": "24a65270771e",
+      "module_sum": "h1:OKD783ebWgqIZn7EAQNP944SpADpjJ8k4XI3nJAeB4o=",
+      "source_file": "internal/gocommand/invoke.go",
+      "source_file_sha256": "6a07f4ecd3e7566643810962ba551001b50bd4403e87a915327899f0cd6d55a5",
+      "patched_file_sha256": "6160b39f9078a4029e97fda86c9609c001b1b290e689068528e8efea1a85a3d9",
+      "environment": "VIM_CONFIG_LOW_RESOURCE",
+      "enabled_value": "1",
+      "enabled_max_in_flight": 1,
+      "default_max_in_flight": 10,
+      "build_method": "verified writable module source copy; replace directive only in temporary gopls go.mod",
+      "global_go_command_limit": 1,
+      "scope": "Invocation.run process-global gate, plus per-Runner capacity, only in low-resource profile"
+    },
+    "low_resource_marker": "bin/gopls-low-resource",
+    "low_resource_marker_contents": "v0.24.0+vim-config.2\n"
   },
   "tools": {
     "phpantom": "{platform}/bin/phpantom_lsp",
@@ -230,7 +259,8 @@
     "tsserver": "shared/node_modules/typescript/lib/tsserver.js",
     "html": "shared/node_modules/vscode-langservers-extracted/bin/vscode-html-language-server",
     "css": "shared/node_modules/vscode-langservers-extracted/bin/vscode-css-language-server",
-    "json": "shared/node_modules/vscode-langservers-extracted/bin/vscode-json-language-server"
+    "json": "shared/node_modules/vscode-langservers-extracted/bin/vscode-json-language-server",
+    "affinity_exec": "linux-x86_64/bin/affinity-exec"
   },
   "downstream_patches": [
     {
@@ -239,7 +269,15 @@
     },
     {
       "path": "tools/patch-gopls.py",
-      "description": "When /proc executable discovery fails, hash the actual bundled binary at the explicitly supplied absolute launcher path."
+      "description": "Hash the exact bundled executable when /proc discovery fails; serialize Go command invocations only for the restricted-container resource profile."
+    },
+    {
+      "path": "tools/patch-typescript.py",
+      "description": "Register the existing server.shutdown callback for LSP shutdown so tsserver is disposed before the parent waits for child handles to close."
+    },
+    {
+      "path": "tools/patch-phpantom.py",
+      "description": "Conditional Tokio pool limits only for restricted-container mode; static musl build preserves full pinned embedded stubs and normal defaults outside that mode."
     }
   ],
   "notice_indexes": [
@@ -302,5 +340,109 @@
     ],
     "os_requirements": "Linux x86-64 with the normal glibc loader and glibc >=2.36 (Debian12 baseline).",
     "wrapper": "bin/node is a shell launcher selecting the private lib/node GCC runtime for bin/node.real."
+  },
+  "affinity_exec_build": {
+    "version": "1",
+    "source_file": "tools/affinity-exec.go",
+    "source_sha256": "ee6dca35b7354624dfcc97e57943e82a1a1fe9afafd3eb30e06710c85bc9a15b",
+    "CGO_ENABLED": "0",
+    "GOOS": "linux",
+    "GOARCH": "amd64",
+    "flags": [
+      "-mod=readonly",
+      "-buildvcs=false",
+      "-trimpath",
+      "-ldflags=-s -w"
+    ],
+    "payload_id": "affinity-exec-v1-linux-x86_64",
+    "interface": "affinity-exec /absolute/program [args...]",
+    "scope": "Select first CPU in the current permitted affinity mask on a locked OS thread, then exec; reduces CPU-sized worker pools, not a hard task limit"
+  },
+  "typescript_shutdown_patch": {
+    "package": "typescript-language-server",
+    "version": "6.0.2",
+    "payload_id": "javascript-language-servers",
+    "upstream_package_url": "https://registry.npmjs.org/typescript-language-server/-/typescript-language-server-6.0.2.tgz",
+    "upstream_package_integrity": "sha512-Ph7Ql+xkUJvMamnkh1h+aKP6HxLR7lrWIYkPn9/LZBkJdJZgtIj7OoVhkDYtQ7zFPTPmqZHOVXaUKGyz9M2q1Q==",
+    "source_file": "node_modules/typescript-language-server/lib/cli.mjs",
+    "source_file_sha256": "192638f1fa62c907fd54c0b55b12dd3dff01325a1a0ed5973907efca1c57b5eb",
+    "patched_file_sha256": "9b5df0f47a7ae0cd63938b8288bba648e71cee9f36ec0cdc626c44d674f2ca2c",
+    "patch_script": "tools/patch-typescript.py",
+    "patch_script_sha256": "9569fb7790c6afa4b8172ba49f879f8cbfb8f40c11ac20dfe32f6d42044e5b44",
+    "description": "Register the existing server.shutdown callback for LSP shutdown so tsserver is disposed before the parent waits for child handles to close."
+  },
+  "phpantom_build": {
+    "upstream_version": "0.11.1",
+    "upstream_revision": "1756b1f920c1290d4c4fdd4d2c902fad53a75cd3",
+    "output_version": "0.11.1+vim-config.1",
+    "payload_id": "phpantom-0.11.1-linux-x86_64",
+    "source_archive": {
+      "filename": "phpantom-source.tar.gz",
+      "url": "https://api.github.com/repos/PHPantom-dev/phpantom_lsp/tarball/1756b1f920c1290d4c4fdd4d2c902fad53a75cd3",
+      "sha256": "f0a1dc7fa44d309e6d5e8ed65a2075749c1fc177b45820031f58290f1aec5cee"
+    },
+    "source_file": "src/main.rs",
+    "source_file_sha256": "2061db18219a3685b128da0ae9faa1c9db1b0beec23cfeb3834b769e4312fc10",
+    "patched_file_sha256": "fe847ea156347f8d0d2ac932f159b4cf12ac1251b8a1cc70760ac6d2e2ac1cc7",
+    "patch_script": "tools/patch-phpantom.py",
+    "patch_script_sha256": "8bcddb1fef1a47119da21c640a6f7baa9119b8889a956bf35d61c20453c24292",
+    "build_script": "tools/build-phpantom.py",
+    "build_script_sha256": "a854c111a4219eeff14e5f5e62033550d7db6e7966a9060063d1b6c5c281d448",
+    "cargo_lock_sha256": "34cb925110bd5bce831f4c71a7158cbaa3311338fa9f7bb4fbbeba0250d40e22",
+    "rust_version": "1.99.1",
+    "cargo_version": "1.99.1 (5f94df478 2026-08-27) (Homebrew)",
+    "zig_version": "0.15.2",
+    "preparation_host": "darwin-arm64",
+    "target": "x86_64-unknown-linux-musl",
+    "preparation_archives": [
+      {
+        "filename": "rustc-1.99.1-aarch64-apple-darwin.tar.xz",
+        "url": "https://static.rust-lang.org/dist/rustc-1.99.1-aarch64-apple-darwin.tar.xz",
+        "sha256": "23948a0a9c162fd2952defb3fb0462c44e8fcfd1a4ab8a274a1e1bdb2cf810a3",
+        "extract_directory": "rustc-1.99.1-aarch64-apple-darwin.tar.xz-extract",
+        "component": "rustc-1.99.1-aarch64-apple-darwin/rustc"
+      },
+      {
+        "filename": "rust-std-1.99.1-aarch64-apple-darwin.tar.xz",
+        "url": "https://static.rust-lang.org/dist/rust-std-1.99.1-aarch64-apple-darwin.tar.xz",
+        "sha256": "fe79d6ab5a0321de26463999d8c112b8ad3eafbcbcf822d66a2300b45dde1031",
+        "extract_directory": "rust-std-1.99.1-aarch64-apple-darwin.tar.xz-extract",
+        "component": "rust-std-1.99.1-aarch64-apple-darwin/rust-std-aarch64-apple-darwin"
+      },
+      {
+        "filename": "rust-std.tar.xz",
+        "url": "https://static.rust-lang.org/dist/rust-std-1.99.1-x86_64-unknown-linux-musl.tar.xz",
+        "sha256": "1dd241eaeb19ff3b5180461c77bdee93d6cafc669eda9de834e7c06b0ec3ca95",
+        "extract_directory": "rust-extract",
+        "component": "rust-std-1.99.1-x86_64-unknown-linux-musl/rust-std-x86_64-unknown-linux-musl"
+      },
+      {
+        "filename": "zig.tar.xz",
+        "url": "https://ziglang.org/download/0.15.2/zig-aarch64-macos-0.15.2.tar.xz",
+        "sha256": "3cc2bab367e185cdfb27501c4b30b1b0653c28d9f73df8dc91488e66ece5fa6b",
+        "extract_directory": "zig-extract"
+      }
+    ],
+    "zig_executable": "zig-extract/zig-aarch64-macos-0.15.2/zig",
+    "macos_sdk": "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.5.sdk",
+    "stubs_archive": {
+      "filename": "phpstorm-stubs-pinned.tar.gz",
+      "url": "https://github.com/JetBrains/phpstorm-stubs/archive/5f68c1021badebe34119fb8fa10ba7cc25de6c0c.tar.gz",
+      "sha256": "8b9bf4b69196d9193f56a4a6ad88b9ff8a230e372312ae8a181c04df1972c4a1"
+    },
+    "stubs_revision": "5f68c1021badebe34119fb8fa10ba7cc25de6c0c",
+    "features": [
+      "offline-stubs"
+    ],
+    "profile": {
+      "lto": "thin",
+      "strip": "symbols"
+    },
+    "resource_environment": "VIM_CONFIG_LOW_RESOURCE",
+    "enabled_value": "1",
+    "tokio_worker_threads": 1,
+    "tokio_max_blocking_threads": 4,
+    "low_resource_marker": "phpantom-low-resource",
+    "description": "Conditional Tokio pool limits only for restricted-container mode; static musl build preserves full pinned embedded stubs and normal defaults outside that mode."
   }
 }

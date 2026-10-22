@@ -17,13 +17,20 @@ for test_script in tests/test-vcs.vim tests/test-ui.vim tests/test-lsp-client.vi
 done
 tests/test-helper-run.sh
 bash tests/test-doctor-failures.sh
+bash tests/test-container-launcher.sh
 bash tests/test-setup.sh
 bash tests/test-find-files.sh
 for script in bin/setup libexec/find-files.bash; do
     bash -n "$script"
 done
-for script in bin/vim-config bin/language-server bin/helper-run bin/vim-config-doctor libexec/helper-run-inner; do
+for script in bin/vim-config bin/language-server bin/helper-run bin/vim-config-doctor libexec/helper-run-inner libexec/resource-env.sh; do
     sh -n "$script"
 done
 python3 tools/prepare-bundle.py --verify
 python3 tests/lsp-smoke.py
+python3 tests/test-container-lifecycle.py
+if command -v ps >/dev/null 2>&1 && ps -axww -o pid= >/dev/null 2>&1; then
+    python3 tests/test-container-typescript.py
+else
+    printf '%s\n' 'SKIP: container TypeScript process-tree test (host process-list access unavailable)'
+fi

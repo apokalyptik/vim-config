@@ -48,7 +48,7 @@ Verified assertions:
 * A `strace -f -e trace=%file` audit of the complete launcher and its descendants found **no file syscall addressing original `/nfs`**, including during bootstrap. This tests the default top-level exclusion without an actual NFS server.
 * Packaged Linux PHPantom and gopls start through the launcher; packaged Node executes JavaScript with the guest's global C++ runtime libraries deliberately absent. The guest uses glibc 2.36 and Node's private included runtime libraries.
 
-An additional regression unmounts `/proc` in a separate guest mount namespace and runs as UID 1000. The original gopls reproduces the container's exact `can't hash gopls executable: readlink /proc/self/exe: no such file or directory` fatal error. The checked-in patched archive, started through the actual `bin/language-server` launcher, initializes and resolves `fmt.Println` into the bundled SDK. The client supplies neither `GOROOT` nor the fallback path, exercising the launcher's configuration. The recorded `exe.sha256` matches the actual binary's SHA-256 (`5d4f220f427060b91aeac48d618a002b921940d795ba828d3b81ed9191edc13b`), including the cache-directory prefix. Missing, relative, nonexistent and unreadable fallback paths are rejected. The same run passes the existing wrapper, stdin, cleanup and zero-touch audit checks.
+An additional regression unmounts `/proc` in a separate guest mount namespace and runs as UID 1000. The original gopls reproduces the container's exact `can't hash gopls executable: readlink /proc/self/exe: no such file or directory` fatal error. The checked-in patched archive, started through the actual `bin/language-server` launcher, initializes and resolves `fmt.Println` into the bundled SDK. The client supplies neither `GOROOT` nor the fallback path, exercising the launcher's configuration. The recorded `exe.sha256` matches the actual binary's SHA-256 (`c3434d66cd8abeaca6fc724e8021bc00d14d74565df5e953abf6d216928b0177`), including the cache-directory prefix. Missing, relative, nonexistent and unreadable fallback paths are rejected. The same run passes the existing wrapper, stdin, cleanup and zero-touch audit checks.
 
 Important boundaries:
 
@@ -58,9 +58,28 @@ Important boundaries:
 * Other independent bind mounts to the same underlying remote storage are not automatically inferred from `/nfs`. Add explicit deny paths for any such aliases.
 * This wrapper constrains configuration-supplied helper processes. It does not restrict Vim commands the user explicitly runs independently, manually opened files, or arbitrary extra plugins loaded by the user.
 
+## Container process and thread budget
+
+The user's next real-container run exceeded its 25-task allowance at 38 and disconnected SSH. The user confirmed that threads count toward that limit. Resource settings therefore apply only to `container`; other profiles retain their normal concurrency.
+
+Linux measurements use eight visible CPUs, UID 1000, no `/proc` in the server's namespace, cold fixture caches, and the actual launcher. A supervisor outside that namespace reads cgroup `pids.peak`, which counts threads and descendant processes, including brief startup/exec transitions. The Node protocol client and observer each use four threads and are excluded from the server subtree figures below; they replace neither a full SSH session nor every possible user workload.
+
+| Workload | Observed kernel peak in server subtree |
+| --- | --- |
+| Previous gopls `.1`, three module folders and standard-library definitions | 58 tasks |
+| Previous gopls with only `GOMAXPROCS=1` and `-p=1` | 25 tasks |
+| Current gopls `.2`, global Go-command gate, affinity and container defaults | 14 tasks / 3 programs / one direct Go command |
+| Upstream PHPantom with affinity, 102 PHP files and default workspace diagnostics enabled | 24 tasks, exceeding the safe budget |
+| Patched PHPantom, production and default-diagnostics stress cases, 102 files including a 485,286-byte / 15,001-line file | 7–8 tasks |
+| TypeScript cross-file definition and property completion | 10 tasks across the parent and one semantic child |
+
+All three current workloads also complete under an enforced 18-task subtree limit with zero refused task creations. Both PHP initialization variants complete definitions, completion and natural EOF exit with an empty helper cgroup. The patched Linux PHP binary limits Tokio to one async worker and four blocking workers in container mode; the tested binary's SHA-256 is `528c27d32c84d6af57f15ceb3b0a3178623164a96b2ea92019a1953a65f0a583`, independently checked against the final archive. Across the affinity Go runs, observed peaks varied up to 15 tasks. CPU-affinity checks preserve an inherited CPU-3-only mask and reject injected GET/SET-affinity errors before a marker child runs. The Go, affinity and patched PHP binaries rebuild byte-for-byte from prepared offline inputs. These observations establish headroom for these fixtures, not a hard bound for arbitrary projects, custom commands, multiple Vim instances or other SSH jobs. `GOMEMLIMIT` is a soft target; no total RAM ceiling is certified.
+
+Native Vim lifecycle tests exercise JS/TS process reuse, switching families, restoring unsaved buffers, hidden same-family buffers, and refusing to start another family while a deliberately slow server is still exiting. PHP can stall after protocol shutdown; the bundled PHP launcher alone receives a bounded TERM fallback after the two-second wait. The next family starts only after confirmed exit. Other lingering servers require a later buffer re-entry to retry. The TypeScript archive includes its missing shutdown callback, and a container-only preload waits for child handles to close before parent exit. A delayed-child fixture checks this ordering. Container Go uses private telemetry-off configuration and disables optional background vulnerability scanning and custom package drivers.
+
 ## Still required on the user's hosts
 
-The Work Container report (Vim 9.1.1244, glibc 2.41, kernel 6.12.107+deb13-amd64) confirms PHPantom, Node JavaScript execution, Go SDK and gopls version startup, plus PHP LSP initialization and definition lookup. The updated doctor's stderr identifies the immediate gopls failure: its persistent-cache setup cannot hash its own executable because `readlink /proc/self/exe` returns `ENOENT`. The bundled compatibility patch supplies an explicit executable-path fallback and preserves content hashing. Go IDE support on the actual host still needs a repeat doctor run with the rebuilt bundle.
+The Work Container report (Vim 9.1.1244, glibc 2.41, kernel 6.12.107+deb13-amd64) confirms PHPantom, Node JavaScript execution, Go SDK and gopls version startup, plus PHP LSP initialization and definition lookup. Its first Go failure was missing executable discovery through `/proc/self/exe`; the subsequent run reached the account's process/thread limit. The checked-in bundle addresses both causes in the local regressions above. Go IDE support on the actual host still needs a repeat doctor run with the rebuilt bundle, from an otherwise idle SSH session with Vim closed.
 
 Run `bin/setup` and `bin/vim-config-doctor --profile PROFILE --lsp` on each relevant host. In particular:
 
@@ -72,3 +91,5 @@ Run `bin/setup` and `bin/vim-config-doctor --profile PROFILE --lsp` on each rele
 Reproducible local checks: `tests/run.sh`, `python3 tests/terminal.py`, `python3 tests/terminal.py tests/benchmark-vim.vim`. `tests/qemu-helper.sh` accepts explicitly prepared kernel/BusyBox/Debian package inputs; its fixture inputs and hashes are kept in the ignored local test workspace rather than shipping a VM in the editor bundle.
 
 For the Linux procfs regression, add `VIM_CONFIG_QEMU_GOPLS_NO_PROC=1` and set `VIM_CONFIG_QEMU_GOPLS_BASELINE` to the original unpatched Linux gopls executable (available from the payload at commit `ec2abe6`). The fixture uses the checked-in patched archive unless an explicit test-only binary override is supplied; the verified run used the archive without an override.
+
+For resource checks, set `VIM_CONFIG_QEMU_GOPLS_RESOURCES=1` and `VIM_CONFIG_QEMU_ADDITIONAL_LSPS=1`. `VIM_CONFIG_QEMU_RESOURCE_CURRENT_ONLY=1` skips historical comparisons, and `VIM_CONFIG_QEMU_RESOURCE_FAMILIES=php,typescript` selects focused cases. The PHP fixture includes both production initialization and the default-diagnostics stress case. The supervisor measures kernel task peaks and repeats each current workload with `pids.max=18`; it also requires zero denial events and an empty helper cgroup afterward.

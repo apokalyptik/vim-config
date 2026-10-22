@@ -202,3 +202,8 @@ if get(g:, 'lsp_enable', true)
 endif
 
 # vim: tabstop=8 shiftwidth=2 softtabstop=2 noexpandtab
+
+# Downstream: container lifecycle never force-terminates a still-running family.
+def g:VimConfigLspStopFamily(server: dict<any>): bool
+  return lsp.VimConfigContainerStop(server)
+enddef
