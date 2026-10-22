@@ -1,6 +1,6 @@
 # Trial validation
 
-This records local evidence, not certification of the user's remote hosts or their codebases.
+This records local tests and explicitly identified user-reported host results.
 
 ## Tested locally
 
@@ -77,13 +77,21 @@ All three current workloads also complete under an enforced 18-task subtree limi
 
 Native Vim lifecycle tests exercise JS/TS process reuse, switching families, restoring unsaved buffers, hidden same-family buffers, and refusing to start another family while a deliberately slow server is still exiting. PHP can stall after protocol shutdown; the bundled PHP launcher alone receives a bounded TERM fallback after the two-second wait. The next family starts only after confirmed exit. Other lingering servers require a later buffer re-entry to retry. The TypeScript archive includes its missing shutdown callback, and a container-only preload waits for child handles to close before parent exit. A delayed-child fixture checks this ordering. Container Go uses private telemetry-off configuration and disables optional background vulnerability scanning and custom package drivers.
 
-## Still required on the user's hosts
+## User-reported Work Container verification
 
-The Work Container report (Vim 9.1.1244, glibc 2.41, kernel 6.12.107+deb13-amd64) confirms PHPantom, Node JavaScript execution, Go SDK and gopls version startup, plus PHP LSP initialization and definition lookup. Its first Go failure was missing executable discovery through `/proc/self/exe`; the subsequent run reached the account's process/thread limit. The checked-in bundle addresses both causes in the local regressions above. Go IDE support on the actual host still needs a repeat doctor run with the rebuilt bundle, from an otherwise idle SSH session with Vim closed.
+On 2026-10-22, the user reported a complete `bin/vim-config-doctor --profile container --lsp` pass after setup on Vim 9.1.1244, glibc 2.41 and kernel 6.12.107+deb13-amd64. The report confirms:
+
+* PHPantom `0.11.1+vim-config.1`, Node `24.22.1`, Go SDK `1.27.3` and gopls `0.24.0+vim-config.2` start on the actual restricted host.
+* PHP LSP initialization and fixture definition lookup pass.
+* Go LSP initialization and standard-library definition lookup pass with functioning bundled Go tooling.
+
+This replaces the earlier failed doctor results caused by missing `/proc/self/exe` and excessive process/thread use. The successful doctor uses temporary fixture projects; actual project completion, navigation and sustained resource use remain the next trial.
+
+## Still required on the user's hosts
 
 Run `bin/setup` and `bin/vim-config-doctor --profile PROFILE --lsp` on each relevant host. In particular:
 
-* Restricted Containers: establish whether the bundled native runtimes and Go tooling can execute under the actual seccomp policy. A successful local or VM test is not a substitute.
+* Restricted Containers: try the full Vim workflow on real projects, including JavaScript/HTML/CSS/JSON server use and language-family switching. The host doctor pass covers runtime startup and PHP/Go fixture navigation.
 * Work Sandbox: validate the complete isolation wrapper, permitted mount topology, tools and the actual project workflow. The earlier `namespace-ok` probe alone is insufficient.
 * Try completion/navigation on a real 500 KB WordPress file and inspect CPU/memory and interactive latency there.
 * Confirm iTerm function-key delivery over the user's SSH path; `:VimMenu` is available if F1 is intercepted.
