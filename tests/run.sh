@@ -16,6 +16,7 @@ for test_script in tests/test-vcs.vim tests/test-ui.vim tests/test-lsp-client.vi
     printf 'PASS: %s\n' "$test_script"
 done
 tests/test-helper-run.sh
+bash tests/test-doctor-failures.sh
 bash tests/test-setup.sh
 bash tests/test-find-files.sh
 for script in bin/setup libexec/find-files.bash; do

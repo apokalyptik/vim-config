@@ -13,6 +13,8 @@ This records local evidence, not certification of the user's remote hosts or the
 * Actual Vim client integration passes on both Vim versions: PHP method completion, cross-file definitions and incoming-call hierarchy.
 * UI tests exercise searchable actions, arrows, Escape, F1 from insert mode, Save and resume typing, jump history, per-buffer fast mode, and CSV/servers.dat statusline parity. PTY tests exercise actual completion menus, passive Enter/arrow behavior and explicit F2 acceptance.
 * VCS/data tests cover argv handling of filenames containing shell metacharacters, excluded paths, commit drafts, SVN peg syntax, temp cleanup and actual Node-backed RBQL queries. They do not submit a real commit to a user's repository.
+* With macOS `sandbox-exec` denying network operations, TCP and Unix bind/listen control probes fail, while gopls initializes over stdio and resolves `fmt.Println`. This does not reproduce Linux seccomp or establish compatibility with the restricted Work Container.
+* Doctor failure fixtures use real Vim channels to check process exit/final stderr, error replies, malformed protocol, termination signals, timeouts, and bounded readable crash output. Probe caches and homes are temporary; telemetry mode files disable Go telemetry for the probes. A local persistent-index permission failure was reproduced and disappears with the isolated `GOPLSCACHE` path; this does not identify the container's failure.
 
 ## PHP scale and measured latency
 
@@ -55,6 +57,8 @@ Important boundaries:
 * This wrapper constrains configuration-supplied helper processes. It does not restrict Vim commands the user explicitly runs independently, manually opened files, or arbitrary extra plugins loaded by the user.
 
 ## Still required on the user's hosts
+
+The first Work Container report (Vim 9.1.1244, glibc 2.41, kernel 6.12.107+deb13-amd64) confirms PHPantom, Node JavaScript execution, Go SDK and gopls version startup, plus PHP LSP initialization and definition lookup. Gopls LSP initialization fails almost immediately. The original doctor omitted the error details for that step; the updated doctor reports them. The cause remains unconfirmed, and Go IDE support on that host has not passed.
 
 Run `bin/setup` and `bin/vim-config-doctor --profile PROFILE --lsp` on each relevant host. In particular:
 

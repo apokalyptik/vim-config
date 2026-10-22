@@ -69,6 +69,8 @@ Rainbow CSV provides CSV/TSV colours, column identification and manual validatio
 
 ## Diagnostics and maintenance
 
-`bin/vim-config-doctor --quick` tests actual executable startup. `--lsp` additionally exercises language-server communication with temporary fixture files; no Python is required on the destination. F1 → Health shows paths/profile inside Vim. Use `:messages` for server startup errors. The doctor uses temporary workspaces/caches; ordinary language servers maintain their usual per-user/project caches.
+`bin/vim-config-doctor --quick` tests actual executable startup. `--lsp` additionally exercises language-server communication with temporary fixture files; no Python is required on the destination. Failed LSP probes print the response or protocol error, process status, elapsed time, and bounded server stderr to help distinguish a rejected syscall, cache error, or timeout. F1 → Health shows paths/profile inside Vim. Use `:messages` for server startup errors.
+
+The doctor uses a temporary home, workspaces and caches, with Go telemetry disabled for those probes. Ordinary gopls sessions put their persistent index in ignored `.state/cache/gopls`; set `GOPLSCACHE` to override it. Other runtime caches retain their usual locations. Ordinary Go telemetry follows its configured mode; `go telemetry off` disables collection and uploading. `GOTELEMETRY` is a read-only reporting variable, so exporting `GOTELEMETRY=off` does not change that mode. See [Go's telemetry documentation](https://go.dev/doc/telemetry).
 
 The installer and file finder are Bash scripts; no custom Perl helper is used. For maintainers, `python3 tools/prepare-bundle.py --verify` checks included payloads and that the Bash-readable `tools/payloads.tsv` matches the JSON manifest. `--rebuild` is an explicit online preparation operation on a build-capable machine, not part of installation. The small downstream LSP integration hooks are reapplied by `tools/patch-lsp.py`.

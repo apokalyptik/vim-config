@@ -13,12 +13,17 @@ shift
 tools="$config_root/.state/tools"
 runtime="$tools/$platform"
 export PATH="$runtime/go/bin:$runtime/bin:$PATH"
-export GOTOOLCHAIN=local GOPROXY=off GOSUMDB=off GOTELEMETRY=off
+export GOTOOLCHAIN=local GOPROXY=off GOSUMDB=off
 # Module dependencies must already exist in the project/vendor or its cache.
 export GOFLAGS="${GOFLAGS-} -mod=readonly"
 case "$server" in
     php) set -- "$runtime/bin/phpantom_lsp" "$@" ;;
-    go) set -- "$runtime/bin/gopls" "$@" ;;
+    go)
+        # gopls can exit asynchronously if its persistent index is unwritable.
+        # Use checkout state by default, without changing the user's Go caches.
+        export GOPLSCACHE="${GOPLSCACHE:-$config_root/.state/cache/gopls}"
+        set -- "$runtime/bin/gopls" "$@"
+        ;;
     typescript) set -- "$runtime/bin/node" "$tools/shared/node_modules/typescript-language-server/lib/cli.mjs" --stdio "$@" ;;
     html|css|json) set -- "$runtime/bin/node" "$tools/shared/node_modules/vscode-langservers-extracted/bin/vscode-$server-language-server" --stdio "$@" ;;
     *) printf 'vim-config: unknown language server: %s\n' "$server" >&2; exit 64 ;;

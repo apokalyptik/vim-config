@@ -116,9 +116,15 @@ def main():
     with tempfile.TemporaryDirectory(prefix='vim-config-acceptance-') as temp:
         project = Path(temp).resolve()
         env = {**os.environ, 'VIM_CONFIG_PROFILE': 'laptop' if os.uname().sysname == 'Darwin' else 'container',
+               'HOME': str(project / 'home'),
                'XDG_CACHE_HOME': str(project / 'cache'), 'XDG_CONFIG_HOME': str(project / 'config'),
                'GOCACHE': str(project / 'gocache'), 'GOMODCACHE': str(project / 'gomodcache'),
-               'GOPATH': str(project / 'gopath'), 'GOTELEMETRYDIR': str(project / 'telemetry')}
+               'GOPLSCACHE': str(project / 'gopls-cache'),
+               'GOPATH': str(project / 'gopath')}
+        for config in [project / 'config', project / 'home/Library/Application Support']:
+            telemetry = config / 'go/telemetry'
+            telemetry.mkdir(parents=True)
+            (telemetry / 'mode').write_text('off\n')
         (project / 'composer.json').write_text('{"autoload":{"classmap":["./"]}}\n')
         lines = ['<?php']
         for number in range(500):
