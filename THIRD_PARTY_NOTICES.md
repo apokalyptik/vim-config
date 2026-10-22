@@ -13,6 +13,7 @@ bundle. The individual upstream licences govern their respective components.
 | Component | Version or revision | Licence and retained notices |
 | --- | --- | --- |
 | [yegappan/lsp](https://github.com/yegappan/lsp) | `c741b2f1afb42b9f267824dac4049674908f4a41` | MIT; `vendor/pack/vim-config/start/lsp/LICENSE` |
+| [Vivid Chalk](https://github.com/tpope/vim-vividchalk) | `be5c6251279bfcfa55cdea8c9a8ccd7a56c8a642` | Same terms as Vim, as stated in `vendor/pack/vim-config/start/vividchalk/colors/vividchalk.vim`; full terms in `vendor/licenses/vim-license.txt` |
 | [vim-fugitive](https://github.com/tpope/vim-fugitive) | `3b753cf8c6a4dcde6edee8827d464ba9b8c4a6f0` | Same terms as Vim, as stated in `vendor/pack/vim-config/opt/fugitive/doc/fugitive.txt`; full terms in `vendor/licenses/vim-license.txt` |
 | [vim-signify](https://github.com/mhinz/vim-signify) | `e7557022f94270e887cbb391a746c1818e570d7f` | MIT; `vendor/pack/vim-config/opt/signify/LICENSE` |
 | [Rainbow CSV and RBQL](https://github.com/mechatroner/rainbow_csv) | `3dbbfd7d17536aebfb80f571255548495574c32b` | MIT; `vendor/pack/vim-config/start/rainbow_csv/LICENSE` and `rbql_core/LICENSE` |

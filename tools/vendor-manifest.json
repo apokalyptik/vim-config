@@ -153,6 +153,14 @@
       "path": "vendor/pack/vim-config/start/servers-dot-dat",
       "archive_source": "https://api.github.com/repos/apokalyptik/vim-servers-dot-dat/tarball/23dfc234f358353d1ae4b8866ac26bfa8cdaea04",
       "archive_sha256": "e5c77a0e6294f1946e9fe1dda184f956524ebbd66b734726abdceb382415f5c4"
+    },
+    {
+      "name": "vividchalk",
+      "repository": "https://github.com/tpope/vim-vividchalk",
+      "revision": "be5c6251279bfcfa55cdea8c9a8ccd7a56c8a642",
+      "path": "vendor/pack/vim-config/start/vividchalk",
+      "archive_source": "https://api.github.com/repos/tpope/vim-vividchalk/tarball/be5c6251279bfcfa55cdea8c9a8ccd7a56c8a642",
+      "archive_sha256": "175970154c33a63ef35cb831ecf0d3a598f8524ca564bea717465c2823fac9c8"
     }
   ],
   "sources": [

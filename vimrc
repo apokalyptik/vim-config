@@ -42,7 +42,7 @@ packloadall
 call vimconfig#data#setup()
 filetype plugin indent on
 syntax enable
-execute 'colorscheme ' . get(g:, 'vimconfig_colorscheme', 'vim-config')
+execute 'colorscheme ' . get(g:, 'vimconfig_colorscheme', 'vividchalk')
 let g:vimconfig_statusline = '%!vimconfig#statusline()'
 let &statusline = g:vimconfig_statusline
 

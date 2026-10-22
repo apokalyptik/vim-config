@@ -28,6 +28,8 @@ Use `./bin/vim-config --profile container file.php` for a one-off profile overri
 
 ## Editing
 
+Vivid Chalk is the default colour scheme and is included in the checkout. Set `g:vimconfig_colorscheme` in `local.vim` to choose another installed scheme.
+
 * **F1** opens actions. Type to filter; use arrows and Enter to choose; Escape dismisses. `:VimMenu` is a fallback if a terminal intercepts F1.
 * Suggestions appear without selecting a match. Ordinary arrow keys dismiss suggestions and move the cursor. Enter inserts a newline; Tab indents.
 * **F2** deliberately enters completion selection. Up/Down preview choices and Enter accepts. Escape dismisses the completion menu. Outside a popup, Escape retains normal Vim behavior.
